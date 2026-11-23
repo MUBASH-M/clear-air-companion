@@ -4,6 +4,10 @@ A friendly assistant that helps families and communities in smog-affected cities
 
 Built from the **Clear Air Companion Project Initiation Document v1.0** (23 November 2026). First launch region: Delhi NCR and the northern India smog belt.
 
+**Live demo:** [mubash-m.github.io/clear-air-companion](https://mubash-m.github.io/clear-air-companion/)
+
+![Clear Air Companion – Today view with live air reading, 24-hour forecast and daily plan](docs/screenshot.png)
+
 ## Features
 
 | Area | What it does | PID reference |
