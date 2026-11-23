@@ -48,6 +48,8 @@ const UI = {
   },
 };
 
+const planTitles: Record<string, string> = {};
+
 const ICONS: Record<PlanItem["icon"], typeof Sun> = { sun: Sun, school: School, route: Route, window: AppWindow, flame: Flame, heart: HeartPulse, home: HomeIcon, leaf: Leaf };
 
 export default function Home() {
@@ -331,9 +333,9 @@ function AirPanel({ q, lang, t, onRetry }: { q: ReturnType<typeof useQuery<AirRe
           <p className="text-sm font-semibold">{t(UI.next24)} <span className="font-normal text-muted-foreground">· {lang === "en" ? "hourly estimate" : "प्रति घंटा अनुमान"}</span></p>
           <div className="mt-2 h-32" data-testid="chart-forecast">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} margin={{ top: 4, right: 0, bottom: 0, left: -28 }}>
+              <BarChart data={chartData} margin={{ top: 8, right: 4, bottom: 0, left: 0 }}>
                 <XAxis dataKey="label" interval={5} tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} width={50} />
+                <YAxis tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} width={34} />
                 <ReferenceLine y={200} stroke="hsl(var(--border))" strokeDasharray="3 3" />
                 <Tooltip
                   cursor={{ fill: "hsl(var(--muted))" }}
@@ -409,8 +411,8 @@ function TodayView({ q, profile, profileTouched, lang, t, done, toggleDone, goPr
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-3">
                     <h2 className="text-base font-semibold leading-snug"><span className="mr-1.5 text-muted-foreground tabular-nums">{i + 1}.</span>{it.title}</h2>
-                    {it.tipId && (
-                      <Button size="sm" variant={isDone ? "default" : "outline"} onClick={() => toggleDone(key)} className="shrink-0" data-testid={`button-done-${it.id}`}>
+                    {(
+                      <Button size="sm" variant={isDone ? "default" : "outline"} onClick={() => { planTitles[key] = it.title; toggleDone(key); }} className="shrink-0" data-testid={`button-done-${it.id}`}>
                         <Check className="h-4 w-4" aria-hidden /><span className="hidden sm:inline">{isDone ? t(UI.done) : t(UI.didThis)}</span>
                       </Button>
                     )}
@@ -566,8 +568,9 @@ function ImpactView({ lang, done, toggleDone, goTips }: { lang: Lang; t: (x: { e
   const protect = tips.filter((t) => !/no direct change/i.test(t.exposure));
   const reduce = tips.filter((t) => !/no direct change|electricity/i.test(t.emissions));
   const strong = tips.filter((t) => t.evidence === "strong").length;
+  const steps = Object.keys(done).filter((id) => id.startsWith("plan-")).sort((a, b) => done[b] - done[a]);
 
-  if (!tips.length) {
+  if (!tips.length && !steps.length) {
     return (
       <div className="rounded-xl border border-dashed p-8 text-center">
         <BarChart3 className="mx-auto h-8 w-8 text-muted-foreground" aria-hidden />
@@ -584,7 +587,7 @@ function ImpactView({ lang, done, toggleDone, goTips }: { lang: Lang; t: (x: { e
       <p className="mt-1 text-sm text-muted-foreground">{lang === "en" ? "A simple running summary of what you've done this session." : "इस सत्र में आपने जो किया उसका सरल सारांश।"}</p>
       <div className="mt-4 grid grid-cols-3 gap-3">
         {[
-          { k: lang === "en" ? "Actions taken" : "उठाए गए कदम", v: tips.length },
+          { k: lang === "en" ? "Actions taken" : "उठाए गए कदम", v: tips.length + steps.length },
           { k: lang === "en" ? "Lower your exposure" : "आपका प्रदूषण घटाते", v: protect.length },
           { k: lang === "en" ? "Cut local emissions" : "स्थानीय उत्सर्जन घटाते", v: reduce.length },
         ].map((s) => (
@@ -605,10 +608,19 @@ function ImpactView({ lang, done, toggleDone, goTips }: { lang: Lang; t: (x: { e
             <Button size="sm" variant="ghost" onClick={() => toggleDone(tip.id)} className="self-start text-muted-foreground" data-testid={`button-undo-${tip.id}`}>{lang === "en" ? "Undo" : "हटाएँ"}</Button>
           </div>
         ))}
+        {steps.map((id) => (
+          <div key={id} className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between" data-testid={`row-impact-${id}`}>
+            <div className="min-w-0">
+              <p className="font-semibold">{planTitles[id] ?? id}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{lang === "en" ? "Plan step followed" : "योजना का कदम पूरा"}</p>
+            </div>
+            <Button size="sm" variant="ghost" onClick={() => toggleDone(id)} className="self-start text-muted-foreground">{lang === "en" ? "Undo" : "हटाएँ"}</Button>
+          </div>
+        ))}
       </div>
       <p className="mt-4 rounded-lg bg-muted/60 p-3 text-xs leading-relaxed text-muted-foreground">
         {lang === "en"
-          ? `${strong} of these ${tips.length} actions rest on strong evidence. Ranges are rules of thumb from published studies and depend on your home, fit and how long you keep them up; we show ranges rather than a single number on purpose.`
+          ? `${strong} of the ${tips.length} library actions here rest on strong evidence. Ranges are rules of thumb from published studies and depend on your home, fit and how long you keep them up; we show ranges rather than a single number on purpose.`
           : `इन ${tips.length} में से ${strong} कदम मज़बूत प्रमाण पर आधारित हैं। दायरे प्रकाशित अध्ययनों के सामान्य नियम हैं और आपके घर, फ़िटिंग और निरंतरता पर निर्भर करते हैं।`}
       </p>
     </div>
