@@ -381,7 +381,9 @@ function TodayView({ q, profile, profileTouched, lang, t, done, toggleDone, goPr
   if (q.isLoading) return <div className="space-y-3">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-24 w-full rounded-xl" />)}</div>;
   if (!q.data) return <p className="text-sm text-muted-foreground">{lang === "en" ? "Your plan will appear once air data loads." : "वायु डेटा लोड होने पर आपकी योजना दिखेगी।"}</p>;
   const plan = buildPlan(q.data, profile, lang);
-  const today = new Date().toLocaleDateString(lang === "en" ? "en-IN" : "hi-IN", { weekday: "long", day: "numeric", month: "long" });
+  // Use the location's local date (from the reading), not the visitor's device date
+  const [yy, mm, dd] = q.data.observedAt.slice(0, 10).split("-").map(Number);
+  const today = new Date(Date.UTC(yy, mm - 1, dd)).toLocaleDateString(lang === "en" ? "en-IN" : "hi-IN", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" });
 
   return (
     <div>
