@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { AirReport, CATEGORIES, PRESET_PLACES, Place, fetchAir, fmtHour, searchPlaces } from "@/lib/air";
+import { AirReport, CATEGORIES, PRESET_PLACES, Place, detectCurrentLocation, fetchAir, fmtHour, searchPlaces } from "@/lib/air";
 import { COST_LABEL, EVIDENCE_LABEL, KIND_LABEL, Lang, TIPS, Tip, TipKind, fx, tipById, tr } from "@/lib/knowledge";
 import { ChatMsg, DEFAULT_PROFILE, PlanItem, Profile, SUGGESTIONS, buildPlan, extractProfile, isSensitive, rankedTips, respond } from "@/lib/companion";
 
@@ -63,7 +63,7 @@ export default function Home() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
 
   const air = useQuery<AirReport>({
-    queryKey: ["air", place.lat, place.lon],
+    queryKey: ["air", place.lat, place.lon, place.name],
     queryFn: () => fetchAir(place),
     staleTime: 10 * 60 * 1000,
     retry: 1,
@@ -195,18 +195,18 @@ function Header({ lang, setLang, place, setPlace, t }: { lang: Lang; setLang: (l
 
   const choose = (p: Place) => { setPlace(p); setOpen(false); setQ(""); setLocError(""); };
 
-  const locate = () => {
-    if (!navigator.geolocation) { setLocError(lang === "en" ? "Location isn't available in this browser." : "इस ब्राउज़र में स्थान उपलब्ध नहीं है।"); return; }
+  const locate = async () => {
+    if (locating) return;
+    setLocError("");
     setLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setLocating(false);
-        // Round to ~1 km – approximate location is enough (PID §8.3)
-        choose({ name: lang === "en" ? "Near you" : "आपके पास", region: "approx. 1 km", lat: Math.round(pos.coords.latitude * 100) / 100, lon: Math.round(pos.coords.longitude * 100) / 100 });
-      },
-      () => { setLocating(false); setLocError(lang === "en" ? "Couldn't get your location. Pick a city instead." : "स्थान नहीं मिला। कोई शहर चुनें।"); },
-      { timeout: 8000, maximumAge: 600000 },
-    );
+    try {
+      const detected = await detectCurrentLocation(lang);
+      choose(detected);
+    } catch {
+      setLocError(lang === "en" ? "Couldn't get your location. Pick a city instead." : "स्थान नहीं मिला। कोई शहर चुनें।");
+    } finally {
+      setLocating(false);
+    }
   };
 
   return (
@@ -218,7 +218,7 @@ function Header({ lang, setLang, place, setPlace, t }: { lang: Lang; setLang: (l
           <p className="hidden truncate text-xs text-muted-foreground sm:block">{t(UI.tagline)}</p>
         </div>
         <div className="relative" ref={boxRef}>
-          <Button variant="outline" size="sm" onClick={() => setOpen((o) => !o)} data-testid="button-location" className="max-w-[150px] sm:max-w-[220px]">
+          <Button variant="outline" size="sm" onClick={() => { setOpen((o) => !o); setLocError(""); }} data-testid="button-location" className="max-w-[150px] sm:max-w-[220px]">
             <MapPin className="h-4 w-4 shrink-0" aria-hidden />
             <span className="truncate">{place.name}</span>
           </Button>
@@ -229,7 +229,8 @@ function Header({ lang, setLang, place, setPlace, t }: { lang: Lang; setLang: (l
                 <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={t(UI.searchCity)} className="pl-8" data-testid="input-city" />
               </div>
               <Button variant="ghost" size="sm" className="mt-2 w-full justify-start" onClick={locate} disabled={locating} data-testid="button-geolocate">
-                <LocateFixed className="h-4 w-4" aria-hidden />{locating ? "…" : t(UI.useLocation)}
+                <LocateFixed className={`h-4 w-4 ${locating ? "animate-pulse" : ""}`} aria-hidden />
+                {locating ? (lang === "en" ? "Finding your location…" : "स्थान खोजा जा रहा है…") : t(UI.useLocation)}
               </Button>
               {locError && <p className="mt-1 text-xs text-destructive">{locError}</p>}
               <div className="mt-2 max-h-64 overflow-y-auto">
@@ -758,7 +759,14 @@ function ProfileView({ lang, profile, update, clearAll, stored, place }: { lang:
         <div className="rounded-xl border bg-card p-5">
           <h2 className="text-base font-semibold">{L("What's stored", "क्या संग्रहीत है")}</h2>
           <ul className="mt-2 space-y-1.5 text-sm text-foreground/80">
-            <li>{L("Location", "स्थान")}: {place.name} {place.region === "approx. 1 km" ? L("(rounded to ~1 km)", "(~1 किमी तक)") : ""}</li>
+            <li>
+              {L("Location", "स्थान")}: {place.name}{" "}
+              {place.approx === "gps" || place.region === "approx. 1 km"
+                ? L("(rounded to ~1 km)", "(~1 किमी तक)")
+                : place.approx === "ip"
+                  ? L("(approximate from network)", "(नेटवर्क से अनुमानित)")
+                  : ""}
+            </li>
             <li>{L("Household profile", "घर की प्रोफ़ाइल")}: {L("7 answers", "7 उत्तर")}</li>
             <li>{L("Logged actions", "दर्ज कदम")}: {stored.actions}</li>
             <li>{L("Chat messages", "चैट संदेश")}: {stored.messages}</li>

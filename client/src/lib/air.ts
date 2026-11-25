@@ -1,7 +1,7 @@
 // Air quality + weather data from Open-Meteo (free, no key, CORS-enabled).
 // Air quality is model data (CAMS) – we label it as an estimate everywhere.
 
-export type Place = { name: string; region?: string; lat: number; lon: number };
+export type Place = { name: string; region?: string; lat: number; lon: number; approx?: "gps" | "ip" };
 
 export const PRESET_PLACES: Place[] = [
   { name: "New Delhi", region: "Delhi", lat: 28.6139, lon: 77.209 },
@@ -158,6 +158,119 @@ export async function searchPlaces(q: string): Promise<Place[]> {
   if (!res.ok) return [];
   const data = await res.json();
   return (data.results ?? []).map((r: any) => ({ name: r.name, region: [r.admin1, r.country].filter(Boolean).join(", "), lat: r.latitude, lon: r.longitude }));
+}
+
+const roundCoord = (n: number) => Math.round(n * 100) / 100;
+
+async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<any> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function reverseGeocode(lat: number, lon: number, lang: "en" | "hi"): Promise<{ name?: string; region?: string }> {
+  try {
+    const data = await fetchJsonWithTimeout(
+      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=10&accept-language=${lang}`,
+      4000,
+    );
+    const addr = data?.address ?? {};
+    const name = addr.city || addr.town || addr.village || addr.suburb || addr.city_district || addr.state_district || addr.county || data?.name;
+    const region = [addr.state, addr.country].filter(Boolean).join(", ");
+    return { name: typeof name === "string" ? name : undefined, region: region || undefined };
+  } catch {
+    return {};
+  }
+}
+
+async function locateByIp(lang: "en" | "hi"): Promise<Place | null> {
+  const fallbackName = lang === "en" ? "Near you" : "आपके पास";
+
+  try {
+    const data = await fetchJsonWithTimeout("https://get.geojs.io/v1/ip/geo.json", 5000);
+    const lat = Number(data?.latitude);
+    const lon = Number(data?.longitude);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+      const region = [data.region, data.country].filter((x) => x && x !== data.city).join(", ");
+      return {
+        name: data.city || fallbackName,
+        region: region || (lang === "en" ? "approx. via network" : "नेटवर्क से अनुमानित"),
+        lat: roundCoord(lat),
+        lon: roundCoord(lon),
+        approx: "ip",
+      };
+    }
+  } catch {
+    // Try secondary IP geolocation provider
+  }
+
+  try {
+    const data = await fetchJsonWithTimeout("https://ipinfo.io/json", 5000);
+    if (typeof data?.loc === "string" && data.loc.includes(",")) {
+      const [rawLat, rawLon] = data.loc.split(",").map(Number);
+      if (Number.isFinite(rawLat) && Number.isFinite(rawLon)) {
+        const region = [data.region, data.country].filter((x) => x && x !== data.city).join(", ");
+        return {
+          name: data.city || fallbackName,
+          region: region || (lang === "en" ? "approx. via network" : "नेटवर्क से अनुमानित"),
+          lat: roundCoord(rawLat),
+          lon: roundCoord(rawLon),
+          approx: "ip",
+        };
+      }
+    }
+  } catch {
+    // Both IP providers failed
+  }
+
+  return null;
+}
+
+function getBrowserPosition(): Promise<GeolocationPosition> {
+  return new Promise((resolve, reject) => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      reject(new Error("Geolocation unavailable"));
+      return;
+    }
+    try {
+      navigator.geolocation.getCurrentPosition(resolve, reject, {
+        enableHighAccuracy: false,
+        timeout: 8000,
+        maximumAge: 600000,
+      });
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+export async function detectCurrentLocation(lang: "en" | "hi" = "en"): Promise<Place> {
+  try {
+    const pos = await getBrowserPosition();
+    // Round to ~1 km – approximate location is enough
+    const lat = roundCoord(pos.coords.latitude);
+    const lon = roundCoord(pos.coords.longitude);
+    const resolved = await reverseGeocode(lat, lon, lang);
+    return {
+      name: resolved.name || (lang === "en" ? "Near you" : "आपके पास"),
+      region: resolved.region || "approx. 1 km",
+      lat,
+      lon,
+      approx: "gps",
+    };
+  } catch {
+    // Fallback to approximate network/IP location when browser geolocation is blocked
+    // (e.g., restricted iframe permissions policy) or unavailable on desktop.
+    const ipPlace = await locateByIp(lang);
+    if (ipPlace) return ipPlace;
+    throw new Error("Could not determine location");
+  }
 }
 
 export function fmtHour(iso: string) {
