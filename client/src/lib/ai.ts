@@ -59,8 +59,17 @@ export async function askGroundedAssistant(params: {
     }),
   });
 
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
+  const contentType = res.headers.get("content-type") ?? "";
+  const isJson = contentType.includes("application/json");
+  const data = isJson ? await res.json().catch(() => ({})) : {};
+  if (!res.ok || !isJson) {
+    if (res.status === 404 || !isJson) {
+      throw new Error(
+        params.lang === "hi"
+          ? "लाइव AI और Google Maps ग्राउंडिंग के लिए फ़ुल-स्टैक सर्वर आवश्यक है (यह स्टैटिक GitHub Pages पर उपलब्ध नहीं है)।"
+          : "Live Gemini Maps Grounding requires the full-stack server deployment (not available on static GitHub Pages).",
+      );
+    }
     throw new Error(typeof data?.error === "string" ? data.error : `Request failed (${res.status})`);
   }
 
@@ -92,8 +101,17 @@ export async function exploreNearbyWithMaps(params: {
     }),
   });
 
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
+  const contentType = res.headers.get("content-type") ?? "";
+  const isJson = contentType.includes("application/json");
+  const data = isJson ? await res.json().catch(() => ({})) : {};
+  if (!res.ok || !isJson) {
+    if (res.status === 404 || !isJson) {
+      throw new Error(
+        params.lang === "hi"
+          ? "स्थानीय Google Maps ग्राउंडिंग के लिए फ़ुल-स्टैक सर्वर आवश्यक है (यह स्टैटिक GitHub Pages पर उपलब्ध नहीं है)।"
+          : "Local Gemini Maps Grounding requires the full-stack server deployment (not available on static GitHub Pages).",
+      );
+    }
     throw new Error(typeof data?.error === "string" ? data.error : `Request failed (${res.status})`);
   }
 
