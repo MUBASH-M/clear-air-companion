@@ -35,7 +35,7 @@ import { GroundedResponse, exploreNearbyWithMaps } from "@/lib/ai";
 import { Lang, tr } from "@/lib/knowledge";
 import { MapsSourcesList } from "@/components/MapsSourcesList";
 
-const MAPS_API_KEY = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined)?.trim() || "";
+const BUILD_MAPS_API_KEY = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined)?.trim() || "";
 const ATTRIBUTION_IDS = ["gmp_mcp_codeassist_v1_aistudio"];
 
 type HeatmapLayerId = "IND_CPCB" | "UAQI_RED_GREEN" | "PM25_INDIGO_PERSIAN" | "OFF";
@@ -312,6 +312,7 @@ function PlacesPinLoader({
 }
 
 function InteractiveMapCanvas({
+  apiKey,
   place,
   report,
   lang,
@@ -322,6 +323,7 @@ function InteractiveMapCanvas({
   onPlacesError,
   onPlacesLoading,
 }: {
+  apiKey: string;
   place: Place;
   report: AirReport | null;
   lang: Lang;
@@ -396,7 +398,7 @@ function InteractiveMapCanvas({
         className="h-full w-full"
       >
         <MapCameraSync lat={place.lat} lon={place.lon} />
-        <AirQualityHeatmapOverlay layer={heatmap} apiKey={MAPS_API_KEY} />
+        <AirQualityHeatmapOverlay layer={heatmap} apiKey={apiKey} />
         <PlacesPinLoader
           activeCategory={activeCategory}
           place={place}
@@ -466,11 +468,32 @@ export function AirMapView({
   lang: Lang;
   onSelectPlace: (p: Place) => void;
 }) {
+  const [mapsApiKey, setMapsApiKey] = useState(BUILD_MAPS_API_KEY);
+  const [keyChecked, setKeyChecked] = useState(Boolean(BUILD_MAPS_API_KEY));
   const [heatmap, setHeatmap] = useState<HeatmapLayerId>("IND_CPCB");
   const [activeCatId, setActiveCatId] = useState<string | null>(null);
   const [mapPinsCount, setMapPinsCount] = useState(0);
   const [placesLoading, setPlacesLoading] = useState(false);
   const [placesError, setPlacesError] = useState("");
+
+  useEffect(() => {
+    if (BUILD_MAPS_API_KEY) return;
+    let cancelled = false;
+    fetch("/api/maps-config")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!cancelled && typeof data?.apiKey === "string" && data.apiKey.trim()) {
+          setMapsApiKey(data.apiKey.trim());
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setKeyChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [customQuery, setCustomQuery] = useState("");
   const [groundedLoading, setGroundedLoading] = useState(false);
@@ -558,7 +581,7 @@ export function AirMapView({
       </div>
 
       {/* Interactive Google Map Section */}
-      {MAPS_API_KEY ? (
+      {mapsApiKey ? (
         <div className="space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-1.5">
@@ -598,12 +621,13 @@ export function AirMapView({
           </div>
 
           <APIProvider
-            apiKey={MAPS_API_KEY}
+            apiKey={mapsApiKey}
             libraries={["marker", "places"]}
             language={lang}
             region="IN"
           >
             <InteractiveMapCanvas
+              apiKey={mapsApiKey}
               place={place}
               report={report}
               lang={lang}
@@ -617,6 +641,10 @@ export function AirMapView({
           </APIProvider>
 
           {placesError && <p className="text-xs text-destructive">{placesError}</p>}
+        </div>
+      ) : !keyChecked ? (
+        <div className="flex h-[220px] items-center justify-center rounded-xl border bg-card">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden />
         </div>
       ) : (
         <div
@@ -633,8 +661,8 @@ export function AirMapView({
               </h2>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                 {lang === "en"
-                  ? "The interactive Google Map canvas and live Air Quality heatmap tiles require a Google Maps Platform API key. Open the Google Maps Settings Panel to finish setup. Meanwhile, you can use the Google Maps-grounded local finder below right away."
-                  : "इंटरैक्टिव Google Map और लाइव वायु गुणवत्ता हीटमैप के लिए Google Maps Platform API कुंजी आवश्यक है। सेटअप पूरा करने के लिए Google Maps Settings Panel खोलें। इस बीच नीचे Google Maps आधारित स्थानीय खोजक तुरंत उपयोग करें।"}
+                  ? "The interactive Google Map canvas and live Air Quality heatmap tiles require a Google Maps Platform API key. Open Settings > Secrets (or the Google Maps Settings Panel) to add GOOGLE_MAPS_API_KEY or VITE_GOOGLE_MAPS_API_KEY, then reload. Meanwhile, you can use the Google Maps-grounded local finder below right away."
+                  : "इंटरैक्टिव Google Map और लाइव वायु गुणवत्ता हीटमैप के लिए Google Maps Platform API कुंजी आवश्यक है। Settings > Secrets (या Google Maps Settings Panel) में GOOGLE_MAPS_API_KEY या VITE_GOOGLE_MAPS_API_KEY जोड़ें। इस बीच नीचे Google Maps आधारित स्थानीय खोजक तुरंत उपयोग करें।"}
               </p>
             </div>
           </div>

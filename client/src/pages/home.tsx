@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Markdown from "react-markdown";
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis, ReferenceLine } from "recharts";
@@ -60,17 +60,52 @@ const ICONS: Record<PlanItem["icon"], typeof Sun> = { sun: Sun, school: School, 
 
 export default function Home() {
   const [lang, setLang] = useState<Lang>("en");
-  const [place, setPlace] = useState<Place>(PRESET_PLACES[0]);
+  const [place, setPlace] = useState<Place | null>(null);
+  const [locatingInitial, setLocatingInitial] = useState(true);
+  const [locInitError, setLocInitError] = useState(false);
   const [profile, setProfile] = useState<Profile>(DEFAULT_PROFILE);
   const [profileTouched, setProfileTouched] = useState(false);
   const [tab, setTab] = useState<TabId>("today");
   const [done, setDone] = useState<Record<string, number>>({});
   const [joined, setJoined] = useState<Record<string, boolean>>({});
   const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const userPickedPlaceRef = useRef(false);
+  const langRef = useRef<Lang>(lang);
+  langRef.current = lang;
+
+  const selectPlace = useCallback((p: Place) => {
+    userPickedPlaceRef.current = true;
+    setLocInitError(false);
+    setLocatingInitial(false);
+    setPlace(p);
+  }, []);
+
+  const autoDetectLocation = useCallback(async (force = false) => {
+    if (force) userPickedPlaceRef.current = false;
+    setLocInitError(false);
+    setLocatingInitial(true);
+    try {
+      const detected = await detectCurrentLocation(langRef.current);
+      if (force || !userPickedPlaceRef.current) {
+        setPlace(detected);
+      }
+    } catch {
+      if (force || !userPickedPlaceRef.current) {
+        setLocInitError(true);
+      }
+    } finally {
+      setLocatingInitial(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void autoDetectLocation(false);
+  }, [autoDetectLocation]);
 
   const air = useQuery<AirReport>({
-    queryKey: ["air", place.lat, place.lon, place.name],
-    queryFn: () => fetchAir(place),
+    queryKey: ["air", place?.lat, place?.lon, place?.name],
+    queryFn: () => fetchAir(place!),
+    enabled: Boolean(place),
     staleTime: 10 * 60 * 1000,
     retry: 1,
   });
@@ -110,10 +145,18 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Header lang={lang} setLang={setLang} place={place} setPlace={setPlace} t={t} />
+      <Header lang={lang} setLang={setLang} place={place} setPlace={selectPlace} locatingInitial={locatingInitial} t={t} />
       <main className="mx-auto max-w-6xl px-4 pb-16 pt-4 md:px-6 lg:grid lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)] lg:gap-6">
         <aside className="lg:sticky lg:top-20 lg:self-start">
-          <AirPanel q={air} lang={lang} t={t} onRetry={() => air.refetch()} />
+          <AirPanel
+            q={air}
+            lang={lang}
+            t={t}
+            hasPlace={Boolean(place)}
+            locating={locatingInitial}
+            locError={locInitError}
+            onRetry={() => (place ? air.refetch() : void autoDetectLocation(true))}
+          />
         </aside>
         <section className="mt-6 min-h-[calc(100vh-57px)] min-w-0 lg:mt-0 lg:min-h-0">
           <nav ref={navRef} className="sticky top-[57px] z-20 -mx-4 mb-4 overflow-x-auto border-b bg-background/95 px-4 backdrop-blur md:-mx-0 md:px-0 lg:top-[65px]" aria-label="Sections">
@@ -140,14 +183,38 @@ export default function Home() {
             </div>
           </nav>
 
-          {tab === "today" && <TodayView q={air} profile={profile} profileTouched={profileTouched} lang={lang} t={t} done={done} toggleDone={toggleDone} goProfile={() => selectTab("profile")} />}
-          {tab === "map" && <AirMapView place={place} report={air.data ?? null} lang={lang} onSelectPlace={setPlace} />}
-          {tab === "ask" && <AskView place={place} report={air.data ?? null} profile={profile} lang={lang} messages={messages} setMessages={setMessages} updateProfile={updateProfile} />}
+          {tab === "today" && (
+            <TodayView
+              q={air}
+              profile={profile}
+              profileTouched={profileTouched}
+              lang={lang}
+              t={t}
+              done={done}
+              toggleDone={toggleDone}
+              goProfile={() => selectTab("profile")}
+              hasPlace={Boolean(place)}
+              locating={locatingInitial}
+              onRetryLocate={() => void autoDetectLocation(true)}
+            />
+          )}
+          {tab === "map" && (
+            place ? (
+              <AirMapView place={place} report={air.data ?? null} lang={lang} onSelectPlace={selectPlace} />
+            ) : (
+              <LocationPendingCard
+                locating={locatingInitial}
+                lang={lang}
+                onRetry={() => void autoDetectLocation(true)}
+              />
+            )
+          )}
+          {tab === "ask" && <AskView place={place} locating={locatingInitial} report={air.data ?? null} profile={profile} lang={lang} messages={messages} setMessages={setMessages} updateProfile={updateProfile} />}
           {tab === "tips" && <TipsView profile={profile} lang={lang} t={t} done={done} toggleDone={toggleDone} />}
           {tab === "impact" && <ImpactView lang={lang} t={t} done={done} toggleDone={toggleDone} goTips={() => selectTab("tips")} />}
           {tab === "community" && <CommunityView lang={lang} joined={joined} setJoined={setJoined} doneCount={Object.keys(done).length} />}
           {tab === "profile" && (
-            <ProfileView lang={lang} profile={profile} update={updateProfile} place={place}
+            <ProfileView lang={lang} profile={profile} update={updateProfile} place={place} locating={locatingInitial}
               clearAll={() => { setProfile(DEFAULT_PROFILE); setProfileTouched(false); setDone({}); setJoined({}); setMessages([]); }}
               stored={{ actions: Object.keys(done).length, messages: messages.length, groups: Object.values(joined).filter(Boolean).length }} />
           )}
@@ -181,7 +248,7 @@ function Logo() {
   );
 }
 
-function Header({ lang, setLang, place, setPlace, t }: { lang: Lang; setLang: (l: Lang) => void; place: Place; setPlace: (p: Place) => void; t: (x: { en: string; hi: string }) => string }) {
+function Header({ lang, setLang, place, setPlace, locatingInitial, t }: { lang: Lang; setLang: (l: Lang) => void; place: Place | null; setPlace: (p: Place) => void; locatingInitial: boolean; t: (x: { en: string; hi: string }) => string }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [results, setResults] = useState<Place[]>([]);
@@ -226,9 +293,19 @@ function Header({ lang, setLang, place, setPlace, t }: { lang: Lang; setLang: (l
           <p className="hidden truncate text-xs text-muted-foreground sm:block">{t(UI.tagline)}</p>
         </div>
         <div className="relative" ref={boxRef}>
-          <Button variant="outline" size="sm" onClick={() => { setOpen((o) => !o); setLocError(""); }} data-testid="button-location" className="max-w-[150px] sm:max-w-[220px]">
-            <MapPin className="h-4 w-4 shrink-0" aria-hidden />
-            <span className="truncate">{place.name}</span>
+          <Button variant="outline" size="sm" onClick={() => { setOpen((o) => !o); setLocError(""); }} data-testid="button-location" className="max-w-[160px] sm:max-w-[220px]">
+            {locatingInitial && !place ? (
+              <LocateFixed className="h-4 w-4 shrink-0 animate-pulse" aria-hidden />
+            ) : (
+              <MapPin className="h-4 w-4 shrink-0" aria-hidden />
+            )}
+            <span className="truncate">
+              {place
+                ? place.name
+                : locatingInitial
+                  ? (lang === "en" ? "Detecting…" : "खोजा जा रहा है…")
+                  : (lang === "en" ? "Choose location" : "स्थान चुनें")}
+            </span>
           </Button>
           {open && (
             <div className="absolute right-0 top-full z-40 mt-2 w-[min(320px,calc(100vw-2rem))] rounded-lg border bg-popover p-3 shadow-lg">
@@ -278,13 +355,74 @@ function AqiDial({ aqi, color }: { aqi: number; color: string }) {
   );
 }
 
-function AirPanel({ q, lang, t, onRetry }: { q: ReturnType<typeof useQuery<AirReport>>; lang: Lang; t: (x: { en: string; hi: string }) => string; onRetry: () => void }) {
-  if (q.isLoading) {
+function LocationPendingCard({ locating, lang, onRetry }: { locating: boolean; lang: Lang; onRetry: () => void }) {
+  if (locating) {
     return (
-      <div className="rounded-xl border bg-card p-5">
-        <Skeleton className="h-4 w-28" />
+      <div className="space-y-3 rounded-xl border bg-card p-6" data-testid="status-map-locating">
+        <p className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          <LocateFixed className="h-4 w-4 animate-pulse text-primary" aria-hidden />
+          {lang === "en" ? "Detecting your current location…" : "आपका वर्तमान स्थान खोजा जा रहा है…"}
+        </p>
+        <Skeleton className="h-64 w-full rounded-lg" />
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-xl border border-dashed bg-card p-6 text-center" data-testid="status-map-location-error">
+      <LocateFixed className="mx-auto h-7 w-7 text-muted-foreground" aria-hidden />
+      <h2 className="mt-2 text-base font-semibold">{lang === "en" ? "We couldn't detect your location" : "आपका स्थान नहीं मिल सका"}</h2>
+      <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+        {lang === "en"
+          ? "Allow location permission in your browser, or pick a city from the location menu above."
+          : "ब्राउज़र में लोकेशन की अनुमति दें, या ऊपर दिए गए स्थान मेनू से कोई शहर चुनें।"}
+      </p>
+      <Button size="sm" className="mt-4" onClick={onRetry} data-testid="button-retry-location">
+        <LocateFixed className="h-4 w-4" aria-hidden />
+        {lang === "en" ? "Detect my location" : "मेरा स्थान खोजें"}
+      </Button>
+    </div>
+  );
+}
+
+function AirPanel({ q, lang, t, hasPlace, locating, locError, onRetry }: {
+  q: ReturnType<typeof useQuery<AirReport>>; lang: Lang; t: (x: { en: string; hi: string }) => string; hasPlace: boolean; locating: boolean; locError: boolean; onRetry: () => void;
+}) {
+  if ((!hasPlace && locating) || q.isLoading) {
+    return (
+      <div className="rounded-xl border bg-card p-5" data-testid="status-air-loading">
+        {!hasPlace && locating ? (
+          <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground" data-testid="status-locating">
+            <LocateFixed className="h-3.5 w-3.5 animate-pulse text-primary" aria-hidden />
+            {lang === "en" ? "Detecting your current location…" : "आपका वर्तमान स्थान खोजा जा रहा है…"}
+          </p>
+        ) : (
+          <Skeleton className="h-4 w-28" />
+        )}
         <div className="mt-4 flex items-center gap-4"><Skeleton className="h-32 w-32 rounded-full" /><div className="flex-1 space-y-2"><Skeleton className="h-6 w-24" /><Skeleton className="h-4 w-32" /></div></div>
         <Skeleton className="mt-5 h-28 w-full" />
+      </div>
+    );
+  }
+  if (!hasPlace) {
+    return (
+      <div className="rounded-xl border bg-card p-5" data-testid="status-location-error">
+        <p className="flex items-center gap-2 font-semibold">
+          <LocateFixed className="h-4 w-4 text-primary" aria-hidden />
+          {lang === "en" ? "Location needed" : "स्थान आवश्यक है"}
+        </p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {locError
+            ? (lang === "en"
+                ? "Couldn't detect your location automatically. Try again or pick a city from the header."
+                : "आपका स्थान अपने आप नहीं मिल सका। फिर कोशिश करें या ऊपर से कोई शहर चुनें।")
+            : (lang === "en"
+                ? "Allow location access or pick a city above to load air quality for your area."
+                : "अपने क्षेत्र की हवा देखने के लिए लोकेशन की अनुमति दें या ऊपर से शहर चुनें।")}
+        </p>
+        <Button size="sm" className="mt-3" onClick={onRetry} data-testid="button-retry-locate">
+          <LocateFixed className="h-4 w-4" aria-hidden />
+          {lang === "en" ? "Try detecting again" : "फिर से खोजें"}
+        </Button>
       </div>
     );
   }
@@ -384,10 +522,15 @@ function AirPanel({ q, lang, t, onRetry }: { q: ReturnType<typeof useQuery<AirRe
 
 // ---------------------------------------------------------------------------
 
-function TodayView({ q, profile, profileTouched, lang, t, done, toggleDone, goProfile }: {
-  q: ReturnType<typeof useQuery<AirReport>>; profile: Profile; profileTouched: boolean; lang: Lang; t: (x: { en: string; hi: string }) => string; done: Record<string, number>; toggleDone: (id: string) => void; goProfile: () => void;
+function TodayView({ q, profile, profileTouched, lang, t, done, toggleDone, goProfile, hasPlace, locating, onRetryLocate }: {
+  q: ReturnType<typeof useQuery<AirReport>>; profile: Profile; profileTouched: boolean; lang: Lang; t: (x: { en: string; hi: string }) => string; done: Record<string, number>; toggleDone: (id: string) => void; goProfile: () => void; hasPlace: boolean; locating: boolean; onRetryLocate: () => void;
 }) {
-  if (q.isLoading) return <div className="space-y-3">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-24 w-full rounded-xl" />)}</div>;
+  if ((!hasPlace && locating) || q.isLoading) return <div className="space-y-3">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-24 w-full rounded-xl" />)}</div>;
+  if (!hasPlace) {
+    return (
+      <LocationPendingCard locating={false} lang={lang} onRetry={onRetryLocate} />
+    );
+  }
   if (!q.data) return <p className="text-sm text-muted-foreground">{lang === "en" ? "Your plan will appear once air data loads." : "वायु डेटा लोड होने पर आपकी योजना दिखेगी।"}</p>;
   const plan = buildPlan(q.data, profile, lang);
   // Use the location's local date (from the reading), not the visitor's device date
@@ -459,8 +602,8 @@ function TodayView({ q, profile, profileTouched, lang, t, done, toggleDone, goPr
 
 // ---------------------------------------------------------------------------
 
-function AskView({ place, report, profile, lang, messages, setMessages, updateProfile }: {
-  place: Place; report: AirReport | null; profile: Profile; lang: Lang; messages: ChatMsg[]; setMessages: React.Dispatch<React.SetStateAction<ChatMsg[]>>; updateProfile: (p: Partial<Profile>) => void;
+function AskView({ place, locating, report, profile, lang, messages, setMessages, updateProfile }: {
+  place: Place | null; locating: boolean; report: AirReport | null; profile: Profile; lang: Lang; messages: ChatMsg[]; setMessages: React.Dispatch<React.SetStateAction<ChatMsg[]>>; updateProfile: (p: Partial<Profile>) => void;
 }) {
   const [text, setText] = useState("");
   const [typing, setTyping] = useState(false);
@@ -486,6 +629,20 @@ function AskView({ place, report, profile, lang, messages, setMessages, updatePr
     const safe = safetyCheck(msg, lang);
     if (safe) {
       setMessages((m) => [...m, safe]);
+      return;
+    }
+
+    if (!place) {
+      setMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          kind: "error",
+          text: locating
+            ? (lang === "en" ? "Still detecting your current location — please try again in a moment." : "आपका वर्तमान स्थान खोजा जा रहा है — कृपया कुछ पल बाद फिर कोशिश करें।")
+            : (lang === "en" ? "Please detect your location or choose a city in the header first so I can give local advice." : "स्थानीय सलाह के लिए कृपया पहले ऊपर से अपना स्थान खोजें या कोई शहर चुनें।"),
+        },
+      ]);
       return;
     }
 
@@ -534,9 +691,13 @@ function AskView({ place, report, profile, lang, messages, setMessages, updatePr
             <MessageCircle className="mx-auto h-8 w-8 text-primary" aria-hidden />
             <h1 className="mt-2 text-lg font-semibold">{lang === "en" ? "Ask about today's air & nearby places" : "आज की हवा और आसपास के स्थानों के बारे में पूछें"}</h1>
             <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-              {lang === "en"
-                ? `Tailored to ${place.name}'s live air reading, your household profile, and up-to-date Google Maps place data.`
-                : `${place.name} की ताज़ा हवा, आपके घर की प्रोफ़ाइल और Google Maps के ताज़ा स्थानीय डेटा के आधार पर उत्तर।`}
+              {place
+                ? (lang === "en"
+                    ? `Tailored to ${place.name}'s live air reading, your household profile, and up-to-date Google Maps place data.`
+                    : `${place.name} की ताज़ा हवा, आपके घर की प्रोफ़ाइल और Google Maps के ताज़ा स्थानीय डेटा के आधार पर उत्तर।`)
+                : locating
+                  ? (lang === "en" ? "Detecting your current location for local air and place guidance…" : "स्थानीय हवा और मार्गदर्शन के लिए आपका वर्तमान स्थान खोजा जा रहा है…")
+                  : (lang === "en" ? "Pick or detect your location above to get tailored local guidance." : "स्थानीय मार्गदर्शन के लिए ऊपर से अपना स्थान चुनें या खोजें।")}
             </p>
           </div>
         )}
@@ -792,7 +953,7 @@ function CommunityView({ lang, joined, setJoined, doneCount }: { lang: Lang; joi
 
 // ---------------------------------------------------------------------------
 
-function ProfileView({ lang, profile, update, clearAll, stored, place }: { lang: Lang; profile: Profile; update: (p: Partial<Profile>) => void; clearAll: () => void; stored: { actions: number; messages: number; groups: number }; place: Place }) {
+function ProfileView({ lang, profile, update, clearAll, stored, place, locating }: { lang: Lang; profile: Profile; update: (p: Partial<Profile>) => void; clearAll: () => void; stored: { actions: number; messages: number; groups: number }; place: Place | null; locating: boolean }) {
   const [confirm, setConfirm] = useState(false);
   const L = (en: string, hi: string) => (lang === "en" ? en : hi);
   const toggles: { k: "children" | "olderAdult" | "pregnant" | "condition"; en: string; hi: string }[] = [
@@ -839,12 +1000,21 @@ function ProfileView({ lang, profile, update, clearAll, stored, place }: { lang:
           <h2 className="text-base font-semibold">{L("What's stored", "क्या संग्रहीत है")}</h2>
           <ul className="mt-2 space-y-1.5 text-sm text-foreground/80">
             <li>
-              {L("Location", "स्थान")}: {place.name}{" "}
-              {place.approx === "gps" || place.region === "approx. 1 km"
-                ? L("(rounded to ~1 km)", "(~1 किमी तक)")
-                : place.approx === "ip"
-                  ? L("(approximate from network)", "(नेटवर्क से अनुमानित)")
-                  : ""}
+              {L("Location", "स्थान")}:{" "}
+              {place ? (
+                <>
+                  {place.name}{" "}
+                  {place.approx === "gps" || place.region === "approx. 1 km"
+                    ? L("(rounded to ~1 km)", "(~1 किमी तक)")
+                    : place.approx === "ip"
+                      ? L("(approximate from network)", "(नेटवर्क से अनुमानित)")
+                      : ""}
+                </>
+              ) : locating ? (
+                L("Detecting…", "खोजा जा रहा है…")
+              ) : (
+                L("Not set", "सेट नहीं है")
+              )}
             </li>
             <li>{L("Household profile", "घर की प्रोफ़ाइल")}: {L("7 answers", "7 उत्तर")}</li>
             <li>{L("Logged actions", "दर्ज कदम")}: {stored.actions}</li>

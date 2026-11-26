@@ -178,7 +178,7 @@ async function reverseGeocode(lat: number, lon: number, lang: "en" | "hi"): Prom
   try {
     const data = await fetchJsonWithTimeout(
       `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=10&accept-language=${lang}`,
-      4000,
+      3500,
     );
     const addr = data?.address ?? {};
     const name = addr.city || addr.town || addr.village || addr.suburb || addr.city_district || addr.state_district || addr.county || data?.name;
@@ -193,7 +193,7 @@ async function locateByIp(lang: "en" | "hi"): Promise<Place | null> {
   const fallbackName = lang === "en" ? "Near you" : "आपके पास";
 
   try {
-    const data = await fetchJsonWithTimeout("https://get.geojs.io/v1/ip/geo.json", 5000);
+    const data = await fetchJsonWithTimeout("https://get.geojs.io/v1/ip/geo.json", 4500);
     const lat = Number(data?.latitude);
     const lon = Number(data?.longitude);
     if (Number.isFinite(lat) && Number.isFinite(lon)) {
@@ -211,7 +211,7 @@ async function locateByIp(lang: "en" | "hi"): Promise<Place | null> {
   }
 
   try {
-    const data = await fetchJsonWithTimeout("https://ipinfo.io/json", 5000);
+    const data = await fetchJsonWithTimeout("https://ipinfo.io/json", 4500);
     if (typeof data?.loc === "string" && data.loc.includes(",")) {
       const [rawLat, rawLon] = data.loc.split(",").map(Number);
       if (Number.isFinite(rawLat) && Number.isFinite(rawLon)) {
@@ -232,45 +232,80 @@ async function locateByIp(lang: "en" | "hi"): Promise<Place | null> {
   return null;
 }
 
-function getBrowserPosition(): Promise<GeolocationPosition> {
+async function getGeolocationPermissionState(): Promise<PermissionState | "unknown"> {
+  if (typeof navigator === "undefined" || !navigator.permissions?.query) return "unknown";
+  try {
+    const status = await navigator.permissions.query({ name: "geolocation" as PermissionName });
+    return status.state;
+  } catch {
+    return "unknown";
+  }
+}
+
+function getBrowserPosition(): Promise<{ latitude: number; longitude: number }> {
   return new Promise((resolve, reject) => {
     if (typeof navigator === "undefined" || !navigator.geolocation) {
       reject(new Error("Geolocation unavailable"));
       return;
     }
     try {
-      navigator.geolocation.getCurrentPosition(resolve, reject, {
-        enableHighAccuracy: false,
-        timeout: 8000,
-        maximumAge: 600000,
-      });
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+        reject,
+        {
+          enableHighAccuracy: false,
+          timeout: 5000,
+          maximumAge: 600000,
+        },
+      );
     } catch (err) {
       reject(err);
     }
   });
 }
 
-export async function detectCurrentLocation(lang: "en" | "hi" = "en"): Promise<Place> {
-  try {
-    const pos = await getBrowserPosition();
-    // Round to ~1 km – approximate location is enough
-    const lat = roundCoord(pos.coords.latitude);
-    const lon = roundCoord(pos.coords.longitude);
-    const resolved = await reverseGeocode(lat, lon, lang);
-    return {
-      name: resolved.name || (lang === "en" ? "Near you" : "आपके पास"),
-      region: resolved.region || "approx. 1 km",
-      lat,
-      lon,
-      approx: "gps",
-    };
-  } catch {
-    // Fallback to approximate network/IP location when browser geolocation is blocked
-    // (e.g., restricted iframe permissions policy) or unavailable on desktop.
-    const ipPlace = await locateByIp(lang);
-    if (ipPlace) return ipPlace;
-    throw new Error("Could not determine location");
+export type LocationDeps = {
+  getPermission: () => Promise<PermissionState | "unknown">;
+  getPosition: () => Promise<{ latitude: number; longitude: number }>;
+  reverseGeocode: (lat: number, lon: number, lang: "en" | "hi") => Promise<{ name?: string; region?: string }>;
+  locateByIp: (lang: "en" | "hi") => Promise<Place | null>;
+};
+
+export async function resolveCurrentLocation(lang: "en" | "hi", deps: LocationDeps): Promise<Place> {
+  const perm = await deps.getPermission().catch(() => "unknown" as const);
+  if (perm !== "denied") {
+    try {
+      const coords = await deps.getPosition();
+      // Round to ~1 km – approximate location is enough
+      const lat = roundCoord(coords.latitude);
+      const lon = roundCoord(coords.longitude);
+      const resolved = await deps.reverseGeocode(lat, lon, lang);
+      return {
+        name: resolved.name || (lang === "en" ? "Near you" : "आपके पास"),
+        region: resolved.region || "approx. 1 km",
+        lat,
+        lon,
+        approx: "gps",
+      };
+    } catch {
+      // Fall through to approximate network/IP location
+    }
   }
+
+  // Fallback to approximate network/IP location when browser geolocation is blocked,
+  // denied (e.g., restricted iframe permissions policy), or unavailable on desktop.
+  const ipPlace = await deps.locateByIp(lang);
+  if (ipPlace) return ipPlace;
+  throw new Error("Could not determine location");
+}
+
+export async function detectCurrentLocation(lang: "en" | "hi" = "en"): Promise<Place> {
+  return resolveCurrentLocation(lang, {
+    getPermission: getGeolocationPermissionState,
+    getPosition: getBrowserPosition,
+    reverseGeocode,
+    locateByIp,
+  });
 }
 
 export function fmtHour(iso: string) {

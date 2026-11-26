@@ -52,14 +52,29 @@ export type MapsGroundingSource = {
   reviewSnippets: MapsReviewSnippet[];
 };
 
-const PORT = Number(process.env.PORT) || 3000;
+function parseCliArg(flag: string): string | undefined {
+  const args = process.argv.slice(2);
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === flag && args[i + 1]) return args[i + 1];
+    if (arg.startsWith(`${flag}=`)) return arg.slice(flag.length + 1);
+  }
+  return undefined;
+}
+
+const PORT = Number(parseCliArg("--port") || process.env.PORT) || 3000;
+const HOST = parseCliArg("--host") || process.env.HOST || "0.0.0.0";
 const IS_PROD = process.env.NODE_ENV === "production";
 const ROOT_DIR = import.meta.dirname;
 const CLIENT_DIR = path.resolve(ROOT_DIR, "client");
 const DIST_DIR = path.resolve(ROOT_DIR, "dist/public");
 
+function getGeminiApiKey(): string {
+  return (process.env.GEMINI_API_KEY || process.env.API_KEY || "").trim();
+}
+
 function getGeminiClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = getGeminiApiKey();
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY_MISSING");
   }
@@ -188,14 +203,15 @@ function formatContextBlock(place: PlaceInput, air?: AirSummaryInput, profile?: 
 
 function handleGeminiError(err: unknown, res: express.Response) {
   const message = err instanceof Error ? err.message : String(err);
-  console.error("Gemini API error:", message);
 
   if (message === "GEMINI_API_KEY_MISSING") {
     return res.status(503).json({
-      error: "Gemini API key is not configured. Check Settings > Secrets to set GEMINI_API_KEY.",
+      error: "Gemini API key is not configured yet. Please check Settings > Secrets to attach GEMINI_API_KEY, then retry.",
       code: "API_KEY_MISSING",
     });
   }
+
+  console.error("Gemini API error:", message);
 
   const lower = message.toLowerCase();
   if (lower.includes("403") || lower.includes("permission_denied") || lower.includes("api_key_invalid")) {
@@ -220,6 +236,10 @@ function handleGeminiError(err: unknown, res: express.Response) {
 async function createServer() {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
+
+  app.get("/api/health", (_req, res) => {
+    res.json({ ok: true, geminiConfigured: Boolean(getGeminiApiKey()) });
+  });
 
   app.post("/api/ask", async (req, res) => {
     try {
@@ -374,6 +394,8 @@ async function createServer() {
     }
   });
 
+  let viteServer: { close: () => Promise<void> } | null = null;
+
   if (!IS_PROD) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
@@ -381,9 +403,11 @@ async function createServer() {
       server: {
         middlewareMode: true,
         hmr: false,
+        ws: false,
       },
       appType: "spa",
     });
+    viteServer = vite;
 
     app.use(vite.middlewares);
 
@@ -407,9 +431,21 @@ async function createServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Clear Air Companion server listening on http://0.0.0.0:${PORT}`);
+  const httpServer = app.listen(PORT, HOST, () => {
+    console.log(`Clear Air Companion server listening on http://${HOST}:${PORT}`);
   });
+
+  const shutdown = () => {
+    httpServer.close(() => {
+      Promise.resolve(viteServer?.close())
+        .catch(() => {})
+        .finally(() => process.exit(0));
+    });
+    setTimeout(() => process.exit(0), 2000).unref();
+  };
+
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 }
 
 createServer().catch((err) => {
