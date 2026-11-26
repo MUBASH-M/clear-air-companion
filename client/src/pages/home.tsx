@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import Markdown from "react-markdown";
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis, ReferenceLine } from "recharts";
 import {
   Wind, MapPin, LocateFixed, RefreshCw, Sun, School, Route, AppWindow, Flame, HeartPulse, Home as HomeIcon, Leaf,
-  Send, ShieldAlert, Check, Users, Search, Trash2, Info, Languages, MessageCircle, CalendarCheck, Lightbulb, BarChart3, UserCog, AlertTriangle,
+  Send, ShieldAlert, Check, Users, Search, Trash2, Info, Languages, MessageCircle, CalendarCheck, Lightbulb, BarChart3, UserCog, AlertTriangle, Compass,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,10 +15,14 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AirReport, CATEGORIES, PRESET_PLACES, Place, detectCurrentLocation, fetchAir, fmtHour, searchPlaces } from "@/lib/air";
+import { askGroundedAssistant } from "@/lib/ai";
 import { COST_LABEL, EVIDENCE_LABEL, KIND_LABEL, Lang, TIPS, Tip, TipKind, fx, tipById, tr } from "@/lib/knowledge";
-import { ChatMsg, DEFAULT_PROFILE, PlanItem, Profile, SUGGESTIONS, buildPlan, extractProfile, isSensitive, rankedTips, respond } from "@/lib/companion";
+import { ChatMsg, DEFAULT_PROFILE, PlanItem, Profile, SUGGESTIONS, buildPlan, extractProfile, isSensitive, rankedTips, safetyCheck } from "@/lib/companion";
+import { DailyGuidanceCard } from "@/components/DailyGuidanceCard";
+import { AirMapView } from "@/components/AirMapView";
+import { MapsSourcesList } from "@/components/MapsSourcesList";
 
-type TabId = "today" | "ask" | "tips" | "impact" | "community" | "profile";
+type TabId = "today" | "map" | "ask" | "tips" | "impact" | "community" | "profile";
 
 const UI = {
   tagline: { en: "Daily guidance for living well through winter smog", hi: "सर्दियों की धुंध में बेहतर जीने के लिए रोज़ का मार्गदर्शन" },
@@ -32,6 +37,7 @@ const UI = {
   searchCity: { en: "Search a city", hi: "शहर खोजें" },
   tabs: {
     today: { en: "Today", hi: "आज" },
+    map: { en: "Map", hi: "नक्शा" },
     ask: { en: "Ask", hi: "पूछें" },
     tips: { en: "Tips", hi: "सुझाव" },
     impact: { en: "Impact", hi: "प्रभाव" },
@@ -113,7 +119,7 @@ export default function Home() {
           <nav ref={navRef} className="sticky top-[57px] z-20 -mx-4 mb-4 overflow-x-auto border-b bg-background/95 px-4 backdrop-blur md:-mx-0 md:px-0 lg:top-[65px]" aria-label="Sections">
             <div className="flex gap-1">
               {(Object.keys(UI.tabs) as TabId[]).map((id) => {
-                const Icon = { today: CalendarCheck, ask: MessageCircle, tips: Lightbulb, impact: BarChart3, community: Users, profile: UserCog }[id];
+                const Icon = { today: CalendarCheck, map: Compass, ask: MessageCircle, tips: Lightbulb, impact: BarChart3, community: Users, profile: UserCog }[id];
                 const active = tab === id;
                 return (
                   <button
@@ -135,7 +141,8 @@ export default function Home() {
           </nav>
 
           {tab === "today" && <TodayView q={air} profile={profile} profileTouched={profileTouched} lang={lang} t={t} done={done} toggleDone={toggleDone} goProfile={() => selectTab("profile")} />}
-          {tab === "ask" && <AskView report={air.data ?? null} profile={profile} lang={lang} messages={messages} setMessages={setMessages} updateProfile={updateProfile} />}
+          {tab === "map" && <AirMapView place={place} report={air.data ?? null} lang={lang} onSelectPlace={setPlace} />}
+          {tab === "ask" && <AskView place={place} report={air.data ?? null} profile={profile} lang={lang} messages={messages} setMessages={setMessages} updateProfile={updateProfile} />}
           {tab === "tips" && <TipsView profile={profile} lang={lang} t={t} done={done} toggleDone={toggleDone} />}
           {tab === "impact" && <ImpactView lang={lang} t={t} done={done} toggleDone={toggleDone} goTips={() => selectTab("tips")} />}
           {tab === "community" && <CommunityView lang={lang} joined={joined} setJoined={setJoined} doneCount={Object.keys(done).length} />}
@@ -150,11 +157,12 @@ export default function Home() {
         <div className="mx-auto flex max-w-6xl flex-col gap-2 px-4 py-6 text-xs text-muted-foreground md:flex-row md:items-center md:justify-between md:px-6">
           <p className="flex items-center gap-1.5"><ShieldAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />{t(UI.disclaimer)}</p>
           <p>
-            {lang === "en" ? "Air data: " : "वायु डेटा: "}
+            {lang === "en" ? "Data: " : "डेटा: "}
             <a className="underline underline-offset-2 hover:text-foreground" href="https://open-meteo.com/en/docs/air-quality-api" target="_blank" rel="noreferrer">Open-Meteo / CAMS</a>
             {" · "}
             <a className="underline underline-offset-2 hover:text-foreground" href="https://airquality.cpcb.gov.in/AQI_India/" target="_blank" rel="noreferrer">CPCB AQI India</a>
-            {" · Clear Air Companion pilot v0.1"}
+            {" · "}
+            <a className="underline underline-offset-2 hover:text-foreground" href="https://cloud.google.com/maps-platform/terms?utm_campaign=gmp_mcp_codeassist_v1_aistudio" target="_blank" rel="noreferrer">Google Maps Platform</a>
           </p>
         </div>
       </footer>
@@ -392,6 +400,14 @@ function TodayView({ q, profile, profileTouched, lang, t, done, toggleDone, goPr
       <h1 className="mt-1 text-xl font-bold leading-tight" data-testid="text-plan-headline">{plan.headline}</h1>
       <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{plan.summary}</p>
 
+      <DailyGuidanceCard
+        report={q.data}
+        profile={profile}
+        profileTouched={profileTouched}
+        lang={lang}
+        onPersonalise={goProfile}
+      />
+
       {!profileTouched && (
         <div className="mt-4 flex flex-col gap-3 rounded-xl border border-dashed bg-accent/40 p-4 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm">{lang === "en" ? "Tell us about your household – children, older adults, health conditions, commute and cooking fuel – and the plan adapts." : "अपने घर के बारे में बताएँ – बच्चे, बुज़ुर्ग, स्वास्थ्य, यात्रा और ईंधन – और योजना आपके अनुसार बदलेगी।"}</p>
@@ -402,7 +418,10 @@ function TodayView({ q, profile, profileTouched, lang, t, done, toggleDone, goPr
         <Badge variant="outline" className="mt-3 gap-1"><HeartPulse className="h-3 w-3" aria-hidden />{lang === "en" ? "Extra-careful mode on" : "अतिरिक्त सावधानी मोड चालू"}</Badge>
       )}
 
-      <ol className="mt-5 space-y-3">
+      <h2 className="mt-6 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        {lang === "en" ? "Today's action plan" : "आज की कार्य योजना"}
+      </h2>
+      <ol className="mt-2.5 space-y-3">
         {plan.items.map((it, i) => {
           const Icon = ICONS[it.icon];
           const key = it.tipId ?? `plan-${it.id}`;
@@ -440,8 +459,8 @@ function TodayView({ q, profile, profileTouched, lang, t, done, toggleDone, goPr
 
 // ---------------------------------------------------------------------------
 
-function AskView({ report, profile, lang, messages, setMessages, updateProfile }: {
-  report: AirReport | null; profile: Profile; lang: Lang; messages: ChatMsg[]; setMessages: React.Dispatch<React.SetStateAction<ChatMsg[]>>; updateProfile: (p: Partial<Profile>) => void;
+function AskView({ place, report, profile, lang, messages, setMessages, updateProfile }: {
+  place: Place; report: AirReport | null; profile: Profile; lang: Lang; messages: ChatMsg[]; setMessages: React.Dispatch<React.SetStateAction<ChatMsg[]>>; updateProfile: (p: Partial<Profile>) => void;
 }) {
   const [text, setText] = useState("");
   const [typing, setTyping] = useState(false);
@@ -449,24 +468,62 @@ function AskView({ report, profile, lang, messages, setMessages, updateProfile }
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }); }, [messages, typing]);
 
-  const send = (raw: string) => {
+  const send = async (raw: string) => {
     const msg = raw.trim();
     if (!msg || typing) return;
+    const historySnapshot = messages
+      .filter((m) => m.kind !== "error")
+      .map((m) => ({ role: m.role, text: m.text }));
     setMessages((m) => [...m, { role: "user", text: msg }]);
     setText("");
+
     const patch = extractProfile(msg);
     const merged = { ...profile, ...patch };
     const changed = (Object.keys(patch) as (keyof Profile)[]).filter((k) => profile[k] !== patch[k]);
     if (changed.length) updateProfile(patch);
+
+    // Always run deterministic emergency & medical safety checks first
+    const safe = safetyCheck(msg, lang);
+    if (safe) {
+      setMessages((m) => [...m, safe]);
+      return;
+    }
+
     setTyping(true);
-    setTimeout(() => {
-      const reply = respond(msg, report, merged, lang);
-      const note = changed.length && reply.kind !== "safety"
-        ? (lang === "en" ? "\n\nI've noted this in your household profile so your daily plan adapts. You can change or delete it in Profile." : "\n\nमैंने इसे आपकी प्रोफ़ाइल में जोड़ लिया है ताकि योजना बदल सके। प्रोफ़ाइल में इसे बदल या मिटा सकते हैं।")
+    try {
+      const grounded = await askGroundedAssistant({
+        message: msg,
+        lang,
+        place,
+        report,
+        profile: merged,
+        history: historySnapshot,
+      });
+      const note = changed.length
+        ? (lang === "en"
+            ? "\n\n*I've noted this in your household profile so your daily plan adapts. You can change or delete it in Profile.*"
+            : "\n\n*मैंने इसे आपकी प्रोफ़ाइल में जोड़ लिया है ताकि योजना बदल सके। प्रोफ़ाइल में इसे बदल या मिटा सकते हैं।*")
         : "";
-      setMessages((m) => [...m, { ...reply, text: reply.text + note }]);
+      setMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          kind: "normal",
+          text: grounded.text + note,
+          sources: grounded.sources,
+        },
+      ]);
+    } catch (err) {
+      const errText =
+        err instanceof Error
+          ? err.message
+          : lang === "en"
+            ? "Could not reach the assistant right now. Please try again."
+            : "अभी सहायक से संपर्क नहीं हो सका। कृपया फिर कोशिश करें।";
+      setMessages((m) => [...m, { role: "assistant", kind: "error", text: errText }]);
+    } finally {
       setTyping(false);
-    }, 550);
+    }
   };
 
   return (
@@ -475,15 +532,34 @@ function AskView({ report, profile, lang, messages, setMessages, updateProfile }
         {messages.length === 0 && (
           <div className="py-6 text-center">
             <MessageCircle className="mx-auto h-8 w-8 text-primary" aria-hidden />
-            <h1 className="mt-2 text-lg font-semibold">{lang === "en" ? "Ask about today's air" : "आज की हवा के बारे में पूछें"}</h1>
-            <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">{lang === "en" ? "Answers come from a reviewed library of health and indoor-air guidance plus live readings. If I don't know, I'll say so." : "उत्तर स्वास्थ्य और घर की हवा के समीक्षित मार्गदर्शन और ताज़ा आँकड़ों से आते हैं। अगर मुझे नहीं पता, तो मैं बता दूँगा।"}</p>
+            <h1 className="mt-2 text-lg font-semibold">{lang === "en" ? "Ask about today's air & nearby places" : "आज की हवा और आसपास के स्थानों के बारे में पूछें"}</h1>
+            <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+              {lang === "en"
+                ? `Tailored to ${place.name}'s live air reading, your household profile, and up-to-date Google Maps place data.`
+                : `${place.name} की ताज़ा हवा, आपके घर की प्रोफ़ाइल और Google Maps के ताज़ा स्थानीय डेटा के आधार पर उत्तर।`}
+            </p>
           </div>
         )}
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`} data-testid={`msg-${m.role}-${i}`}>
-            <div className={`max-w-[88%] whitespace-pre-line rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${m.role === "user" ? "rounded-br-md bg-primary text-primary-foreground" : m.kind === "safety" ? "rounded-bl-md border-2 border-destructive/50 bg-destructive/5" : "rounded-bl-md bg-muted"}`}>
+            <div
+              className={`max-w-[90%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                m.role === "user"
+                  ? "whitespace-pre-line rounded-br-md bg-primary text-primary-foreground"
+                  : m.kind === "safety" || m.kind === "error"
+                    ? "whitespace-pre-line rounded-bl-md border-2 border-destructive/50 bg-destructive/5"
+                    : "rounded-bl-md bg-muted"
+              }`}
+            >
               {m.kind === "safety" && <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-destructive"><ShieldAlert className="h-3.5 w-3.5" aria-hidden />{lang === "en" ? "Safety response" : "सुरक्षा उत्तर"}</p>}
-              {m.text}
+              {m.kind === "error" && <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-destructive"><AlertTriangle className="h-3.5 w-3.5" aria-hidden />{lang === "en" ? "Unable to reply" : "उत्तर प्राप्त नहीं हुआ"}</p>}
+              {m.role === "assistant" && m.kind !== "safety" && m.kind !== "error" ? (
+                <div className="prose prose-sm max-w-none text-foreground prose-p:my-1.5 prose-ul:my-1.5 prose-li:my-0.5 prose-strong:text-foreground prose-a:text-primary">
+                  <Markdown>{m.text}</Markdown>
+                </div>
+              ) : (
+                m.text
+              )}
               {m.tips && m.tips.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {m.tips.map((id) => {
@@ -491,6 +567,9 @@ function AskView({ report, profile, lang, messages, setMessages, updateProfile }
                     return <span key={id} className="rounded-full border bg-background px-2 py-0.5 text-xs text-foreground/80">{tr(tip.title, lang)}</span>;
                   })}
                 </div>
+              )}
+              {m.sources && m.sources.length > 0 && (
+                <MapsSourcesList sources={m.sources} lang={lang} compact />
               )}
             </div>
           </div>
@@ -507,7 +586,7 @@ function AskView({ report, profile, lang, messages, setMessages, updateProfile }
           ))}
         </div>
         <form onSubmit={(e) => { e.preventDefault(); send(text); }} className="flex gap-2">
-          <Input value={text} onChange={(e) => setText(e.target.value)} placeholder={lang === "en" ? "e.g. My son has asthma – can he play outside?" : "जैसे: मेरे बेटे को दमा है – क्या वह बाहर खेल सकता है?"} data-testid="input-chat" aria-label="Message" />
+          <Input value={text} onChange={(e) => setText(e.target.value)} placeholder={lang === "en" ? "e.g. Where can I buy N95 masks near me?" : "जैसे: मेरे पास N95 मास्क कहाँ मिल सकते हैं?"} data-testid="input-chat" aria-label="Message" />
           <Button type="submit" disabled={!text.trim() || typing} data-testid="button-send" aria-label="Send"><Send className="h-4 w-4" /></Button>
         </form>
       </div>

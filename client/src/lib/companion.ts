@@ -1,4 +1,5 @@
 import { AirReport, CATEGORIES, CategoryKey, fmtHour } from "./air";
+import { MapsGroundingSource } from "./ai";
 import { Lang, T, TIPS, Tip, tr } from "./knowledge";
 
 export type Profile = {
@@ -169,12 +170,305 @@ export function buildPlan(r: AirReport, p: Profile, l: Lang): { headline: string
   return { headline, summary, items };
 }
 
+export type GuidanceIcon = "mask" | "activity" | "window" | "heart" | "shield" | "wind";
+
+export type GuidanceTip = {
+  id: string;
+  icon: GuidanceIcon;
+  priority: "high" | "medium" | "low";
+  title: string;
+  detail: string;
+  tag: string;
+};
+
+export type DailyGuidance = {
+  headline: string;
+  subtext: string;
+  aqiLabel: string;
+  personalizedFor: string[];
+  tips: GuidanceTip[];
+};
+
+export function buildDailyGuidance(r: AirReport, p: Profile, l: Lang): DailyGuidance {
+  const sev = SEV[r.category];
+  const catLabel = tr(CATEGORIES[r.category], l);
+  const sensitive = isSensitive(p);
+  const bestTxt = r.bestWindow ? `${fmtHour(r.bestWindow.start)}–${fmtHour(r.bestWindow.end)}` : "";
+  const worstTxt = r.worstWindow ? `${fmtHour(r.worstWindow.start)}–${fmtHour(r.worstWindow.end)}` : "";
+  const L = (en: string, hi: string) => (l === "en" ? en : hi);
+
+  const personalizedFor: string[] = [];
+  if (p.children) personalizedFor.push(L("Children", "बच्चे"));
+  if (p.olderAdult) personalizedFor.push(L("Older adults", "बुज़ुर्ग"));
+  if (p.pregnant) personalizedFor.push(L("Pregnancy", "गर्भावस्था"));
+  if (p.condition) personalizedFor.push(L("Respiratory / heart care", "साँस / हृदय देखभाल"));
+  if (p.commute === "two_wheeler" || p.commute === "auto" || p.commute === "walk_cycle") {
+    personalizedFor.push(L("Open commute", "खुली यात्रा"));
+  }
+
+  const headline =
+    sev >= 5
+      ? L("Severe air — stay indoors and wear an N95 mask if going out", "गंभीर प्रदूषण — घर के अंदर रहें, बाहर जाने पर N95 मास्क पहनें")
+      : sev === 4
+        ? L("Very poor air — wear an N95/FFP2 mask and avoid outdoor exertion", "बहुत खराब हवा — N95/FFP2 मास्क पहनें और बाहर श्रम से बचें")
+        : sev === 3
+          ? L("Wear an N95 mask today and limit long outdoor stays", "आज N95 मास्क पहनें और बाहर ज़्यादा देर न रहें")
+          : sev === 2
+            ? sensitive
+              ? L("Moderate air — take extra precautions for sensitive family members", "मध्यम हवा — संवेदनशील सदस्यों के लिए अतिरिक्त सावधानी रखें")
+              : L("Moderate air — keep heavy exercise away from busy roads", "मध्यम हवा — व्यस्त सड़कों के पास भारी व्यायाम से बचें")
+            : sev === 1
+              ? L("Satisfactory air — normal outdoor plans are fine today", "संतोषजनक हवा — आज सामान्य बाहरी गतिविधियाँ ठीक हैं")
+              : L("Clean air today — great time to be outdoors and air out your home", "आज साफ़ हवा — बाहर रहने और घर में ताज़ी हवा लाने का अच्छा समय");
+
+  const subtext =
+    sev >= 3
+      ? L(
+          `PM2.5 is currently ${Math.round(r.pm25)} µg/m³ (${catLabel}). Prioritise protection when stepping outside.`,
+          `अभी PM2.5 ${Math.round(r.pm25)} µg/m³ (${catLabel}) है। बाहर निकलते समय सुरक्षा को प्राथमिकता दें।`,
+        )
+      : sev === 2
+        ? L(
+            `Estimated AQI is ${r.aqi} (${catLabel}). Sensitive groups and open commuters benefit most from simple precautions.`,
+            `अनुमानित AQI ${r.aqi} (${catLabel}) है। संवेदनशील समूह और खुली सवारी वाले सरल सावधानियों से सुरक्षित रह सकते हैं।`,
+          )
+        : L(
+            `Estimated AQI is ${r.aqi} (${catLabel}). Air quality is comfortable for most daily routines.`,
+            `अनुमानित AQI ${r.aqi} (${catLabel}) है। अधिकतर दैनिक गतिविधियों के लिए हवा अनुकूल है।`,
+          );
+
+  const tips: GuidanceTip[] = [];
+
+  // 1. Mask & respiratory protection tip
+  if (sev >= 3) {
+    tips.push({
+      id: "mask",
+      icon: "mask",
+      priority: "high",
+      title:
+        sev >= 4
+          ? L("Wear a snug N95 or FFP2 mask for every outdoor trip", "हर बाहरी यात्रा पर अच्छी तरह फ़िट N95 या FFP2 मास्क पहनें")
+          : L("Wear an N95 mask today when heading outdoors", "आज बाहर निकलते समय N95 मास्क पहनें"),
+      detail:
+        p.commute === "two_wheeler"
+          ? L(
+              "Pinch the nose clip firmly under your helmet so there are no cheek gaps. Cloth and surgical masks let fine PM2.5 straight through.",
+              "हेलमेट के नीचे नाक की क्लिप अच्छी तरह दबाएँ ताकि गालों पर गैप न हो। कपड़े और सर्जिकल मास्क महीन PM2.5 नहीं रोकते।",
+            )
+          : L(
+              "Check for a tight seal around the nose and cheeks — fit matters more than brand. Cloth and surgical masks offer little protection against fine smog.",
+              "नाक और गालों के पास अच्छी सील जाँचें — ब्रांड से ज़्यादा फ़िटिंग मायने रखती है। कपड़े और सर्जिकल मास्क धुंध में कम असर करते हैं।",
+            ),
+      tag: `${L("AQI", "AQI")} · ${catLabel}`,
+    });
+  } else if (sev === 2 && (sensitive || p.commute === "two_wheeler" || p.commute === "auto")) {
+    tips.push({
+      id: "mask-mod",
+      icon: "mask",
+      priority: "medium",
+      title: L("Keep an N95 mask handy near heavy traffic", "भारी ट्रैफ़िक के पास N95 मास्क साथ रखें"),
+      detail: L(
+        "Roadside pollution spikes well above the city average, especially during rush hours or open-air commutes.",
+        "सड़क किनारे प्रदूषण शहर के औसत से काफ़ी ज़्यादा होता है, खासकर भीड़ के समय या खुली यात्रा में।",
+      ),
+      tag: p.commute === "two_wheeler" || p.commute === "auto" ? L("Commute", "यात्रा") : L("Sensitive care", "संवेदनशील देखभाल"),
+    });
+  }
+
+  // 2. Activity & timing tip
+  if (sev >= 3) {
+    tips.push({
+      id: "activity",
+      icon: "activity",
+      priority: sev >= 4 ? "high" : "medium",
+      title:
+        sev >= 4
+          ? L("Skip outdoor workouts; keep activity indoors", "बाहर व्यायाम न करें; गतिविधि घर के अंदर रखें")
+          : L("Shift runs and brisk walks indoors today", "दौड़ और तेज़ सैर आज घर के अंदर करें"),
+      detail: bestTxt
+        ? L(
+            `Deep breathing outdoors pulls far more particles into the lungs. If you must run errands, aim for the cleanest window (${bestTxt}).`,
+            `बाहर तेज़ साँस लेने से फेफड़ों में कई गुना अधिक कण जाते हैं। ज़रूरी काम सबसे साफ़ समय (${bestTxt}) में निपटाएँ।`,
+          )
+        : L(
+            "Deep breathing during exercise increases inhaled pollution sharply. Opt for indoor stretching, yoga or light home routines.",
+            "व्यायाम में तेज़ साँस लेने से प्रदूषण की मात्रा तेज़ी से बढ़ती है। घर के अंदर योग या स्ट्रेचिंग चुनें।",
+          ),
+      tag: bestTxt ? `${L("Best", "बेहतर")} ${bestTxt}` : L("Outdoors", "बाहर"),
+    });
+  } else if (sev === 2) {
+    tips.push({
+      id: "activity-mod",
+      icon: "activity",
+      priority: "medium",
+      title: L("Choose quieter streets and lighter pace outdoors", "बाहर शांत गलियाँ और हल्की गति चुनें"),
+      detail: bestTxt
+        ? L(
+            `Plan walks or outdoor exercise around ${bestTxt} and stay at least one street away from main traffic corridors.`,
+            `सैर या व्यायाम ${bestTxt} के आसपास रखें और मुख्य ट्रैफ़िक सड़कों से कम से कम एक गली दूर रहें।`,
+          )
+        : L(
+            "Avoid jogging alongside busy roads, especially during 8–10 am and 6–9 pm traffic peaks.",
+            "व्यस्त सड़कों के किनारे दौड़ने से बचें, खासकर सुबह 8–10 और शाम 6–9 के चरम समय में।",
+          ),
+      tag: bestTxt ? `${L("Best", "बेहतर")} ${bestTxt}` : L("Activity", "गतिविधि"),
+    });
+  } else {
+    tips.push({
+      id: "activity-good",
+      icon: "activity",
+      priority: "low",
+      title: L("Enjoy outdoor walks and exercise today", "आज बाहर सैर और व्यायाम का आनंद लें"),
+      detail: bestTxt
+        ? L(
+            `Air is relatively clear, with the freshest stretch around ${bestTxt}. Still avoid idling traffic where possible.`,
+            `हवा अपेक्षाकृत साफ़ है, सबसे ताज़ा समय ${bestTxt} के आसपास है। फिर भी चालू गाड़ियों के धुएँ से दूर रहें।`,
+          )
+        : L(
+            "Conditions are favourable for outdoor movement and children's play. Prefer parks and side streets over main roads.",
+            "बाहर व्यायाम और बच्चों के खेलने के लिए मौसम अनुकूल है। मुख्य सड़कों के बजाय पार्क या शांत गलियाँ चुनें।",
+          ),
+      tag: L("Outdoors", "बाहर"),
+    });
+  }
+
+  // 3. Household-personalized health tip (condition / children / pregnant / olderAdult)
+  if (p.condition) {
+    tips.push({
+      id: "condition",
+      icon: "heart",
+      priority: sev >= 2 ? "high" : "low",
+      title:
+        sev >= 3
+          ? L("Keep your reliever inhaler and doctor's plan close", "अपना रिलीवर इनहेलर और डॉक्टर की योजना पास रखें")
+          : L("Monitor breathing comfort near traffic or dust", "ट्रैफ़िक या धूल के पास साँस की सहजता पर ध्यान दें"),
+      detail:
+        sev >= 3
+          ? L(
+              "High particulate levels can trigger wheezing, coughing or chest tightness. Rest in your cleanest room and check with a doctor before prolonged mask use if breathless.",
+              "अधिक प्रदूषण से घरघराहट, खाँसी या सीने में जकड़न हो सकती है। सबसे साफ़ कमरे में आराम करें और साँस फूलने पर डॉक्टर से सलाह लें।",
+            )
+          : L(
+              "Even on calmer days, carry prescribed reliever medication when travelling through congested areas.",
+              "सामान्य दिनों में भी भीड़भाड़ वाले इलाकों में जाते समय डॉक्टर की बताई दवा साथ रखें।",
+            ),
+      tag: L("Asthma / Heart", "दमा / हृदय"),
+    });
+  } else if (p.children) {
+    tips.push({
+      id: "children",
+      icon: "shield",
+      priority: sev >= 3 ? "high" : "low",
+      title:
+        sev >= 3
+          ? L("Plan indoor play and use a child-sized mask for commutes", "अंदर खेल की योजना बनाएँ और रास्ते में बच्चों का मास्क दें")
+          : L("Encourage outdoor play away from idling vehicles", "चालू गाड़ियों से दूर बाहर खेलने को प्रोत्साहित करें"),
+      detail:
+        sev >= 3
+          ? L(
+              "Children breathe faster per body weight than adults. Keep car windows shut on recirculate and rinse faces after returning indoors.",
+              "बच्चे बड़ों की तुलना में तेज़ी से साँस लेते हैं। कार की खिड़कियाँ बंद (रिसर्कुलेट) रखें और लौटने पर चेहरा धोएँ।",
+            )
+          : L(
+              "Wait away from idling school buses and cars at drop-off and pick-up gates.",
+              "स्कूल गेट पर चालू बसों और कारों से दूर खड़े रहें।",
+            ),
+      tag: L("For children", "बच्चों के लिए"),
+    });
+  } else if (p.pregnant) {
+    tips.push({
+      id: "pregnant",
+      icon: "heart",
+      priority: sev >= 2 ? "high" : "low",
+      title:
+        sev >= 3
+          ? L("Spend peak hours in your cleanest room", "चरम समय सबसे साफ़ कमरे में बिताएँ")
+          : L("Keep indoor air free of smoke and incense", "घर की हवा को धुएँ और अगरबत्ती से मुक्त रखें"),
+      detail: L(
+        "Minimising fine-particle exposure during pregnancy supports both your comfort and wellbeing. Avoid incense, coils and roadside exhaust.",
+        "गर्भावस्था के दौरान महीन कणों से बचाव आपकी सेहत के लिए मददगार है। अगरबत्ती, मच्छर कॉइल और सड़क के धुएँ से बचें।",
+      ),
+      tag: L("Pregnancy care", "गर्भावस्था देखभाल"),
+    });
+  } else if (p.olderAdult) {
+    tips.push({
+      id: "older",
+      icon: "heart",
+      priority: sev >= 3 ? "high" : "low",
+      title:
+        sev >= 3
+          ? L("Pause early-morning walks until smog lifts", "धुंध छँटने तक सुबह की सैर रोकें")
+          : L("Take morning walks once traffic and mist clear", "ट्रैफ़िक और कोहरा छँटने के बाद सैर पर जाएँ"),
+      detail: L(
+        "Cold morning air traps pollutants closest to the ground. A gentle afternoon walk or indoor movement is much easier on the heart and lungs.",
+        "सुबह की ठंडी हवा प्रदूषण को ज़मीन के पास रोक लेती है। दोपहर की हल्की सैर या घर में चलना हृदय और फेफड़ों के लिए बेहतर है।",
+      ),
+      tag: L("Older adults", "बुज़ुर्ग"),
+    });
+  }
+
+  // 4. Indoor air & ventilation tip (always useful, rounds out to 3-4 tips)
+  if (sev >= 3) {
+    tips.push({
+      id: "indoor-vent",
+      icon: "window",
+      priority: "medium",
+      title: bestTxt
+        ? L(`Keep windows closed; ventilate briefly at ${bestTxt}`, `खिड़कियाँ बंद रखें; ${bestTxt} पर थोड़ी देर हवा आने दें`)
+        : L("Keep windows closed during morning & evening peaks", "सुबह और शाम के चरम समय पर खिड़कियाँ बंद रखें"),
+      detail:
+        worstTxt
+          ? L(
+              `Pollution peaks around ${worstTxt}. Seal door gaps, skip incense or coils, and run a HEPA purifier or DIY box-fan filter if available.`,
+              `${worstTxt} के आसपास प्रदूषण सबसे ज़्यादा रहता है। दरवाज़ों की दरारें बंद करें, अगरबत्ती न जलाएँ और संभव हो तो फ़िल्टर चलाएँ।`,
+            )
+          : L(
+              "Avoid indoor smoke sources like incense, mosquito coils and dry sweeping; wet-mop floors and run a filter in the bedroom.",
+              "अगरबत्ती, मच्छर कॉइल और सूखी झाड़ू से बचें; गीला पोछा लगाएँ और सोने के कमरे में फ़िल्टर चलाएँ।",
+            ),
+      tag: L("Indoor air", "घर की हवा"),
+    });
+  } else {
+    tips.push({
+      id: "indoor-fresh",
+      icon: "wind",
+      priority: "low",
+      title: L("Cross-ventilate your home while air is fresher", "हवा साफ़ होने पर घर में क्रॉस-वेंटिलेशन करें"),
+      detail:
+        p.fuel === "wood" || p.fuel === "kerosene"
+          ? L(
+              "Open opposite windows for 15–20 minutes to flush out indoor cooking smoke and trapped humidity.",
+              "रसोई का धुआँ और जमी नमी बाहर निकालने के लिए 15–20 मिनट तक आमने-सामने की खिड़कियाँ खोलें।",
+            )
+          : L(
+              "Open windows on opposite sides for 15–20 minutes to refresh indoor air, and switch on the kitchen exhaust while cooking.",
+              "घर की हवा ताज़ा करने के लिए 15–20 मिनट खिड़कियाँ खोलें, और खाना बनाते समय रसोई का एग्ज़ॉस्ट चलाएँ।",
+            ),
+      tag: L("Indoor air", "घर की हवा"),
+    });
+  }
+
+  return {
+    headline,
+    subtext,
+    aqiLabel: `${L("AQI", "AQI")} ${r.aqi} · ${catLabel}`,
+    personalizedFor,
+    tips: tips.slice(0, 4),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Conversational assistant – grounded in the knowledge library with safety
 // checks. Sensitive health situations get a fixed, pre-approved response.
 // ---------------------------------------------------------------------------
 
-export type ChatMsg = { role: "user" | "assistant"; text: string; kind?: "safety" | "normal" | "unknown"; tips?: string[] };
+export type ChatMsg = {
+  role: "user" | "assistant";
+  text: string;
+  kind?: "safety" | "normal" | "unknown" | "error";
+  tips?: string[];
+  sources?: MapsGroundingSource[];
+};
 
 const has = (s: string, words: string[]) => words.some((w) => s.includes(w));
 
@@ -470,9 +764,9 @@ export function respond(text: string, r: AirReport | null, p: Profile, l: Lang):
 }
 
 export const SUGGESTIONS: T[] = [
-  { en: "Is it safe to send my child to school today?", hi: "क्या आज बच्चे को स्कूल भेजना सुरक्षित है?" },
-  { en: "When should I open the windows?", hi: "खिड़कियाँ कब खोलूँ?" },
+  { en: "Where can I buy N95 masks near me?", hi: "मेरे पास N95 मास्क कहाँ मिल सकते हैं?" },
+  { en: "Nearest metro stations for a cleaner commute?", hi: "कम धुएँ वाली यात्रा के लिए सबसे पास मेट्रो स्टेशन कौन से हैं?" },
+  { en: "Indoor places for my child to play today?", hi: "आज बच्चे के खेलने के लिए पास में इनडोर जगहें कौन सी हैं?" },
+  { en: "When should I open the windows today?", hi: "आज खिड़कियाँ कब खोलूँ?" },
   { en: "Cheap ways to clean indoor air?", hi: "घर की हवा साफ़ करने के सस्ते तरीके?" },
-  { en: "Can I go for a run this evening?", hi: "क्या आज शाम दौड़ने जा सकता हूँ?" },
-  { en: "Do indoor plants help?", hi: "क्या घर के पौधे मदद करते हैं?" },
 ];

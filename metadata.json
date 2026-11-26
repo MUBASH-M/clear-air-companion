@@ -3,5 +3,8 @@
   "description": "A friendly assistant that turns live air quality into a personalised daily plan, low-cost indoor air tips and cleaner everyday choices for families in smog-affected cities.",
   "requestFramePermissions": [
     "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]
 }
