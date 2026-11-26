@@ -152,31 +152,53 @@ export async function fetchAir(place: Place): Promise<AirReport> {
   };
 }
 
+type OpenMeteoGeoResult = {
+  name?: string;
+  admin1?: string;
+  country?: string;
+  latitude?: number;
+  longitude?: number;
+};
+
 export async function searchPlaces(q: string): Promise<Place[]> {
   if (q.trim().length < 2) return [];
   const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=6&language=en`);
   if (!res.ok) return [];
-  const data = await res.json();
-  return (data.results ?? []).map((r: any) => ({ name: r.name, region: [r.admin1, r.country].filter(Boolean).join(", "), lat: r.latitude, lon: r.longitude }));
+  const data = (await res.json()) as { results?: OpenMeteoGeoResult[] };
+  return (data.results ?? [])
+    .filter((r): r is Required<Pick<OpenMeteoGeoResult, "name" | "latitude" | "longitude">> & OpenMeteoGeoResult =>
+      typeof r.name === "string" && Number.isFinite(r.latitude) && Number.isFinite(r.longitude),
+    )
+    .map((r) => ({
+      name: r.name,
+      region: [r.admin1, r.country].filter(Boolean).join(", "),
+      lat: r.latitude,
+      lon: r.longitude,
+    }));
 }
 
 const roundCoord = (n: number) => Math.round(n * 100) / 100;
 
-async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<any> {
+async function fetchJsonWithTimeout<T = Record<string, unknown>>(url: string, timeoutMs: number): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
+    return (await res.json()) as T;
   } finally {
     clearTimeout(timer);
   }
 }
 
+type NominatimReverseResponse = {
+  name?: string;
+  address?: Record<string, string | undefined>;
+};
+
 async function reverseGeocode(lat: number, lon: number, lang: "en" | "hi"): Promise<{ name?: string; region?: string }> {
   try {
-    const data = await fetchJsonWithTimeout(
+    const data = await fetchJsonWithTimeout<NominatimReverseResponse>(
       `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=10&accept-language=${lang}`,
       3500,
     );
@@ -189,11 +211,26 @@ async function reverseGeocode(lat: number, lon: number, lang: "en" | "hi"): Prom
   }
 }
 
+type GeoJsResponse = {
+  city?: string;
+  region?: string;
+  country?: string;
+  latitude?: string | number;
+  longitude?: string | number;
+};
+
+type IpInfoResponse = {
+  city?: string;
+  region?: string;
+  country?: string;
+  loc?: string;
+};
+
 async function locateByIp(lang: "en" | "hi"): Promise<Place | null> {
   const fallbackName = lang === "en" ? "Near you" : "आपके पास";
 
   try {
-    const data = await fetchJsonWithTimeout("https://get.geojs.io/v1/ip/geo.json", 4500);
+    const data = await fetchJsonWithTimeout<GeoJsResponse>("https://get.geojs.io/v1/ip/geo.json", 4500);
     const lat = Number(data?.latitude);
     const lon = Number(data?.longitude);
     if (Number.isFinite(lat) && Number.isFinite(lon)) {
@@ -211,7 +248,7 @@ async function locateByIp(lang: "en" | "hi"): Promise<Place | null> {
   }
 
   try {
-    const data = await fetchJsonWithTimeout("https://ipinfo.io/json", 4500);
+    const data = await fetchJsonWithTimeout<IpInfoResponse>("https://ipinfo.io/json", 4500);
     if (typeof data?.loc === "string" && data.loc.includes(",")) {
       const [rawLat, rawLon] = data.loc.split(",").map(Number);
       if (Number.isFinite(rawLat) && Number.isFinite(rawLon)) {
@@ -282,7 +319,7 @@ export async function resolveCurrentLocation(lang: "en" | "hi", deps: LocationDe
       const resolved = await deps.reverseGeocode(lat, lon, lang);
       return {
         name: resolved.name || (lang === "en" ? "Near you" : "आपके पास"),
-        region: resolved.region || "approx. 1 km",
+        region: resolved.region || (lang === "en" ? "approx. 1 km" : "लगभग 1 किमी"),
         lat,
         lon,
         approx: "gps",

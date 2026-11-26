@@ -1,6 +1,6 @@
 import { AirReport, CATEGORIES, CategoryKey, fmtHour } from "./air";
 import { MapsGroundingSource } from "./ai";
-import { Lang, T, TIPS, Tip, tr } from "./knowledge";
+import { Lang, T, TIPS, Tip, tipById, tr } from "./knowledge";
 
 export type Profile = {
   children: boolean;
@@ -42,10 +42,13 @@ const budgetMaxCost = (b: Profile["budget"]) => (b === "tight" ? 1 : b === "some
 
 export function rankedTips(kind: Tip["kind"][] | null, p: Profile): Tip[] {
   const max = budgetMaxCost(p.budget);
-  return TIPS.filter((t) => (!kind || kind.includes(t.kind)))
-    .sort((a, b) => a.cost - b.cost || b.effect - a.effect)
-    .map((t) => ({ ...t, _ok: t.cost <= max }))
-    .sort((a: any, b: any) => Number(b._ok) - Number(a._ok));
+  return TIPS.filter((t) => !kind || kind.includes(t.kind))
+    .slice()
+    .sort((a, b) => {
+      const aFits = a.cost <= max ? 1 : 0;
+      const bFits = b.cost <= max ? 1 : 0;
+      return bFits - aFits || a.cost - b.cost || b.effect - a.effect;
+    });
 }
 
 export function buildPlan(r: AirReport, p: Profile, l: Lang): { headline: string; summary: string; items: PlanItem[] } {
@@ -132,10 +135,10 @@ export function buildPlan(r: AirReport, p: Profile, l: Lang): { headline: string
 
   // Cooking
   if (p.fuel === "wood" || p.fuel === "kerosene") {
-    const t = TIPS.find((x) => x.id === "clean-fuel")!;
+    const t = tipById("clean-fuel");
     items.push({ id: "cooking", icon: "flame", title: tr(t.title, l), detail: tr(t.body, l), exposure: t.exposure, emissions: t.emissions, tipId: t.id });
   } else {
-    const t = TIPS.find((x) => x.id === "exhaust-cooking")!;
+    const t = tipById("exhaust-cooking");
     items.push({ id: "cooking", icon: "flame", title: tr(t.title, l), detail: tr(t.body, l), exposure: t.exposure, tipId: t.id });
   }
 
@@ -159,12 +162,12 @@ export function buildPlan(r: AirReport, p: Profile, l: Lang): { headline: string
   }
 
   // One budget-fit indoor tip
-  const indoor = rankedTips(["indoor"], p).filter((t) => !["ventilate-window"].includes(t.id));
+  const indoor = rankedTips(["indoor"], p).filter((t) => t.id !== "ventilate-window");
   const pick = sev >= 3 ? indoor.find((t) => t.effect >= 2 && t.cost <= budgetMaxCost(p.budget)) ?? indoor[0] : indoor[0];
   items.push({ id: "indoor", icon: "home", title: tr(pick.title, l), detail: tr(pick.body, l), exposure: pick.exposure, tipId: pick.id });
 
   // One action for the neighbourhood
-  const civic = TIPS.find((t) => t.id === (p.commute === "car" ? "no-burning" : "no-burning"))!;
+  const civic = tipById("no-burning");
   items.push({ id: "civic", icon: "leaf", title: tr(civic.title, l), detail: tr(civic.body, l), emissions: civic.emissions, tipId: civic.id });
 
   return { headline, summary, items };

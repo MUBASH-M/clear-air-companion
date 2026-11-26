@@ -3,54 +3,16 @@ import express from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { GoogleGenAI } from "@google/genai";
-
-type Lang = "en" | "hi";
-
-type PlaceInput = {
-  name: string;
-  region?: string;
-  lat: number;
-  lon: number;
-};
-
-type AirSummaryInput = {
-  aqi: number;
-  category: string;
-  dominant: string;
-  pm25: number;
-  pm10: number;
-  bestWindow?: string | null;
-  worstWindow?: string | null;
-};
-
-type ProfileInput = {
-  children?: boolean;
-  olderAdult?: boolean;
-  pregnant?: boolean;
-  condition?: boolean;
-  home?: string;
-  commute?: string;
-  fuel?: string;
-  budget?: string;
-};
-
-type HistoryItem = {
-  role: "user" | "assistant";
-  text: string;
-};
-
-export type MapsReviewSnippet = {
-  uri?: string;
-  title?: string;
-  text?: string;
-};
-
-export type MapsGroundingSource = {
-  title: string;
-  uri: string;
-  placeId?: string;
-  reviewSnippets: MapsReviewSnippet[];
-};
+import {
+  askRequestSchema,
+  createRateLimiter,
+  extractMapsSources,
+  formatContextBlock,
+  mapGeminiError,
+  mapsExploreRequestSchema,
+  sanitizeHistory,
+  validateLatLon,
+} from "./server/helpers";
 
 function parseCliArg(flag: string): string | undefined {
   const args = process.argv.slice(2);
@@ -73,6 +35,10 @@ function getGeminiApiKey(): string {
   return (process.env.GEMINI_API_KEY || process.env.API_KEY || "").trim();
 }
 
+function getPublicMapsApiKey(): string {
+  return (process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || "").trim();
+}
+
 function getGeminiClient(): GoogleGenAI {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
@@ -88,195 +54,75 @@ function getGeminiClient(): GoogleGenAI {
   });
 }
 
-function isSafeHttpUrl(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "https:" || parsed.protocol === "http:";
-  } catch {
-    return false;
-  }
-}
-
-function extractMapsSources(response: unknown): MapsGroundingSource[] {
-  const resp = response as {
-    candidates?: Array<{
-      groundingMetadata?: {
-        groundingChunks?: Array<{
-          maps?: {
-            uri?: string;
-            title?: string;
-            placeId?: string;
-            placeAnswerSources?: {
-              reviewSnippets?: Array<{
-                uri?: string;
-                title?: string;
-                reviewText?: string;
-                text?: string;
-              }>;
-            };
-          };
-        }>;
-      };
-    }>;
-  };
-
-  const chunks = resp?.candidates?.[0]?.groundingMetadata?.groundingChunks;
-  if (!Array.isArray(chunks)) return [];
-
-  const seen = new Set<string>();
-  const results: MapsGroundingSource[] = [];
-
-  for (const chunk of chunks) {
-    const maps = chunk?.maps;
-    if (!maps || !isSafeHttpUrl(maps.uri)) continue;
-    if (seen.has(maps.uri)) continue;
-    seen.add(maps.uri);
-
-    const rawSnippets = maps.placeAnswerSources?.reviewSnippets;
-    const reviewSnippets: MapsReviewSnippet[] = Array.isArray(rawSnippets)
-      ? rawSnippets
-          .map((s) => ({
-            uri: isSafeHttpUrl(s?.uri) ? s.uri : undefined,
-            title: typeof s?.title === "string" ? s.title : undefined,
-            text:
-              typeof s?.reviewText === "string"
-                ? s.reviewText
-                : typeof s?.text === "string"
-                  ? s.text
-                  : undefined,
-          }))
-          .filter((s) => Boolean(s.uri || s.text || s.title))
-          .slice(0, 3)
-      : [];
-
-    results.push({
-      title: typeof maps.title === "string" && maps.title.trim() ? maps.title.trim() : "View on Google Maps",
-      uri: maps.uri,
-      placeId: typeof maps.placeId === "string" ? maps.placeId : undefined,
-      reviewSnippets,
-    });
-  }
-
-  return results;
-}
-
-function validateLatLon(place: unknown): PlaceInput | null {
-  if (!place || typeof place !== "object") return null;
-  const p = place as Record<string, unknown>;
-  const lat = Number(p.lat);
-  const lon = Number(p.lon);
-  if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
-    return null;
-  }
-  const name = typeof p.name === "string" && p.name.trim() ? p.name.trim().slice(0, 120) : "Selected location";
-  const region = typeof p.region === "string" ? p.region.trim().slice(0, 120) : undefined;
-  return { name, region, lat, lon };
-}
-
-function formatContextBlock(place: PlaceInput, air?: AirSummaryInput, profile?: ProfileInput): string {
-  const lines: string[] = [
-    `Location: ${place.name}${place.region ? ` (${place.region})` : ""} [${place.lat.toFixed(2)}, ${place.lon.toFixed(2)}]`,
-  ];
-
-  if (air && Number.isFinite(Number(air.aqi))) {
-    lines.push(
-      `Live air quality estimate (Open-Meteo CAMS, India CPCB AQI scale): AQI ${Math.round(Number(air.aqi))} (${String(air.category ?? "unknown")}), dominant pollutant ${String(air.dominant ?? "PM2.5")}, PM2.5 ${Math.round(Number(air.pm25 ?? 0))} µg/m³, PM10 ${Math.round(Number(air.pm10 ?? 0))} µg/m³.`,
-    );
-    if (air.bestWindow) lines.push(`Cleanest waking window today: ${String(air.bestWindow)}.`);
-    if (air.worstWindow) lines.push(`Worst waking window today: ${String(air.worstWindow)}.`);
-  }
-
-  if (profile) {
-    const flags: string[] = [];
-    if (profile.children) flags.push("children at home");
-    if (profile.olderAdult) flags.push("older adults (60+)");
-    if (profile.pregnant) flags.push("someone is pregnant");
-    if (profile.condition) flags.push("asthma, COPD, or heart condition");
-    lines.push(
-      `Household profile: ${flags.length ? flags.join(", ") : "no special sensitivity flags"}; home=${profile.home ?? "apartment"}; commute=${profile.commute ?? "metro"}; cooking fuel=${profile.fuel ?? "lpg"}; budget=${profile.budget ?? "tight"}.`,
-    );
-  }
-
-  return lines.join("\n");
+function getClientKey(req: express.Request): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  const first = Array.isArray(forwarded) ? forwarded[0] : typeof forwarded === "string" ? forwarded.split(",")[0] : "";
+  return (first || req.ip || "unknown").trim();
 }
 
 function handleGeminiError(err: unknown, res: express.Response) {
-  const message = err instanceof Error ? err.message : String(err);
-
-  if (message === "GEMINI_API_KEY_MISSING") {
-    return res.status(503).json({
-      error: "Gemini API key is not configured yet. Please check Settings > Secrets to attach GEMINI_API_KEY, then retry.",
-      code: "API_KEY_MISSING",
-    });
+  const mapped = mapGeminiError(err);
+  if (mapped.code !== "API_KEY_MISSING") {
+    console.error("Gemini API request failed:", mapped.code);
   }
-
-  console.error("Gemini API error:", message);
-
-  const lower = message.toLowerCase();
-  if (lower.includes("403") || lower.includes("permission_denied") || lower.includes("api_key_invalid")) {
-    return res.status(403).json({
-      error: "Gemini API key was rejected. Please verify your API key in Settings > Secrets.",
-      code: "API_KEY_INVALID",
-    });
-  }
-  if (lower.includes("429") || lower.includes("resource_exhausted") || lower.includes("quota")) {
-    return res.status(429).json({
-      error: "Rate limit or quota reached for the Gemini API. Please try again shortly.",
-      code: "QUOTA_EXCEEDED",
-    });
-  }
-
-  return res.status(502).json({
-    error: "Unable to get a live response right now. Please try again in a moment.",
-    code: "UPSTREAM_ERROR",
+  return res.status(mapped.status).json({
+    error: mapped.error,
+    code: mapped.code,
   });
 }
 
 async function createServer() {
   const app = express();
-  app.use(express.json({ limit: "1mb" }));
+  app.disable("x-powered-by");
+  app.use(express.json({ limit: "256kb" }));
+
+  // Baseline security headers (preserving iframe compatibility by omitting X-Frame-Options)
+  app.use((_req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("Permissions-Policy", "geolocation=(self)");
+    next();
+  });
+
+  const checkAiRateLimit = createRateLimiter({ windowMs: 60_000, maxRequests: 30 });
+
+  const rateLimitMiddleware: express.RequestHandler = (req, res, next) => {
+    const result = checkAiRateLimit(getClientKey(req));
+    if (!result.allowed) {
+      res.setHeader("Retry-After", String(result.retryAfterSec));
+      return res.status(429).json({
+        error: "Too many requests. Please wait a moment and try again.",
+        code: "RATE_LIMITED",
+      });
+    }
+    return next();
+  };
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true, geminiConfigured: Boolean(getGeminiApiKey()) });
   });
 
-  app.post("/api/ask", async (req, res) => {
-    try {
-      const body = req.body as {
-        message?: unknown;
-        lang?: unknown;
-        place?: unknown;
-        air?: AirSummaryInput;
-        profile?: ProfileInput;
-        history?: unknown;
-      };
+  app.get("/api/maps-config", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ apiKey: getPublicMapsApiKey() });
+  });
 
-      const message = typeof body.message === "string" ? body.message.trim() : "";
-      if (!message || message.length > 1500) {
+  app.post("/api/ask", rateLimitMiddleware, async (req, res) => {
+    try {
+      const parsed = askRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
         return res.status(400).json({ error: "Please enter a valid question." });
       }
 
-      const lang: Lang = body.lang === "hi" ? "hi" : "en";
-      const place = validateLatLon(body.place);
+      const { message, lang, air, profile } = parsed.data;
+      const place = validateLatLon(parsed.data.place);
       if (!place) {
         return res.status(400).json({ error: "Valid location coordinates are required." });
       }
 
-      const history: HistoryItem[] = Array.isArray(body.history)
-        ? body.history
-            .filter(
-              (item): item is HistoryItem =>
-                Boolean(item) &&
-                typeof item === "object" &&
-                ((item as HistoryItem).role === "user" || (item as HistoryItem).role === "assistant") &&
-                typeof (item as HistoryItem).text === "string",
-            )
-            .slice(-6)
-        : [];
-
+      const history = sanitizeHistory(parsed.data.history);
       const ai = getGeminiClient();
-      const context = formatContextBlock(place, body.air, body.profile);
+      const context = formatContextBlock(place, air, profile);
 
       const systemInstruction = [
         "You are Clear Air Companion, a calm, practical, evidence-based air quality wellbeing assistant for families living through urban smog.",
@@ -295,7 +141,7 @@ async function createServer() {
       const contents = [
         ...history.map((item) => ({
           role: item.role === "assistant" ? "model" : "user",
-          parts: [{ text: item.text.slice(0, 1200) }],
+          parts: [{ text: item.text }],
         })),
         { role: "user", parts: [{ text: message }] },
       ];
@@ -330,28 +176,21 @@ async function createServer() {
     }
   });
 
-  app.post("/api/maps-explore", async (req, res) => {
+  app.post("/api/maps-explore", rateLimitMiddleware, async (req, res) => {
     try {
-      const body = req.body as {
-        query?: unknown;
-        lang?: unknown;
-        place?: unknown;
-        air?: AirSummaryInput;
-      };
-
-      const query = typeof body.query === "string" ? body.query.trim() : "";
-      if (!query || query.length > 500) {
+      const parsed = mapsExploreRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
         return res.status(400).json({ error: "Please enter a valid place query." });
       }
 
-      const lang: Lang = body.lang === "hi" ? "hi" : "en";
-      const place = validateLatLon(body.place);
+      const { query, lang, air } = parsed.data;
+      const place = validateLatLon(parsed.data.place);
       if (!place) {
         return res.status(400).json({ error: "Valid location coordinates are required." });
       }
 
       const ai = getGeminiClient();
-      const context = formatContextBlock(place, body.air);
+      const context = formatContextBlock(place, air);
 
       const systemInstruction = [
         "You are Clear Air Companion's local place finder powered by Google Maps.",
@@ -449,6 +288,6 @@ async function createServer() {
 }
 
 createServer().catch((err) => {
-  console.error("Failed to start server:", err);
+  console.error("Failed to start server:", err instanceof Error ? err.message : "unknown error");
   process.exit(1);
 });

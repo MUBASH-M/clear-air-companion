@@ -222,7 +222,11 @@ export const TIPS: Tip[] = [
   },
 ];
 
-export const tipById = (id: string) => TIPS.find((t) => t.id === id)!;
+export const tipById = (id: string): Tip => {
+  const found = TIPS.find((t) => t.id === id);
+  if (!found) throw new Error(`Unknown tip id: ${id}`);
+  return found;
+};
 
 // Hindi renderings of the effect ranges shown in the impact view.
 const EFFECT_HI: Record<string, string> = {

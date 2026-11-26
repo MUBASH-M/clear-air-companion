@@ -1,6 +1,7 @@
 import { ExternalLink, MapPin, Quote } from "lucide-react";
 import { MapsGroundingSource } from "@/lib/ai";
 import { Lang } from "@/lib/knowledge";
+import { isSafeHttpUrl } from "@/lib/url";
 
 type MapsSourcesListProps = {
   sources: MapsGroundingSource[];
@@ -9,19 +10,22 @@ type MapsSourcesListProps = {
 };
 
 export function MapsSourcesList({ sources, lang, compact = false }: MapsSourcesListProps) {
-  if (!sources.length) return null;
+  const safeSources = sources.filter((src) => isSafeHttpUrl(src.uri));
+  if (!safeSources.length) return null;
 
   return (
     <div
       className={compact ? "mt-2.5 border-t border-border/60 pt-2" : "mt-4 border-t pt-3"}
       data-testid="maps-grounding-sources"
+      role="region"
+      aria-label={lang === "en" ? "Verified Google Maps sources" : "Google Maps सत्यापित स्रोत"}
     >
       <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
         <MapPin className="h-3.5 w-3.5 text-primary" aria-hidden />
         {lang === "en" ? "Verified on Google Maps" : "Google Maps पर सत्यापित स्थान"}
       </p>
       <ul className={compact ? "space-y-1.5" : "grid gap-2 sm:grid-cols-2"}>
-        {sources.map((src) => (
+        {safeSources.map((src) => (
           <li
             key={src.uri}
             className="rounded-lg border bg-background/90 p-2.5 text-xs transition-colors hover:border-primary/40"
@@ -45,7 +49,7 @@ export function MapsSourcesList({ sources, lang, compact = false }: MapsSourcesL
                     <Quote className="mt-0.5 h-3 w-3 shrink-0 opacity-70" aria-hidden />
                     <div className="min-w-0">
                       {snip.text && <p className="line-clamp-2 leading-relaxed">{snip.text}</p>}
-                      {snip.uri && (
+                      {isSafeHttpUrl(snip.uri) && (
                         <a
                           href={snip.uri}
                           target="_blank"

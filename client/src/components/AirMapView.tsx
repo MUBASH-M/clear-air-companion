@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import Markdown from "react-markdown";
+import { SafeMarkdown } from "@/components/SafeMarkdown";
+import { isSafeHttpUrl } from "@/lib/url";
 import {
   APIProvider,
   APILoadingStatus,
@@ -209,7 +210,7 @@ function NearbyPlaceMarker({
                 {pin.rating.toFixed(1)}
               </p>
             )}
-            {pin.uri && (
+            {isSafeHttpUrl(pin.uri) && (
               <a
                 href={pin.uri}
                 target="_blank"
@@ -560,7 +561,7 @@ export function AirMapView({
       </div>
 
       {/* Category buttons trigger both live map pins (when Maps JS is loaded) and Maps Grounding */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2" role="group" aria-label={lang === "en" ? "Nearby place categories" : "आसपास के स्थानों की श्रेणियाँ"}>
         {NEARBY_CATEGORIES.map((cat) => {
           const Icon = cat.icon;
           const active = activeCatId === cat.id;
@@ -570,6 +571,7 @@ export function AirMapView({
               size="sm"
               variant={active ? "default" : "outline"}
               onClick={() => handleCategoryClick(cat)}
+              aria-pressed={active}
               className="gap-1.5"
               data-testid={`map-category-${cat.id}`}
             >
@@ -584,7 +586,7 @@ export function AirMapView({
       {mapsApiKey ? (
         <div className="space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={lang === "en" ? "Air quality overlay" : "वायु गुणवत्ता परत"}>
               <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
                 <Layers className="h-3.5 w-3.5" aria-hidden />
                 {lang === "en" ? "Air overlay:" : "वायु परत:"}
@@ -594,6 +596,7 @@ export function AirMapView({
                   key={opt.id}
                   type="button"
                   onClick={() => setHeatmap(opt.id)}
+                  aria-pressed={heatmap === opt.id}
                   className={`rounded-md border px-2 py-0.5 text-xs font-medium transition-colors ${
                     heatmap === opt.id
                       ? "border-primary bg-primary text-primary-foreground"
@@ -640,7 +643,7 @@ export function AirMapView({
             />
           </APIProvider>
 
-          {placesError && <p className="text-xs text-destructive">{placesError}</p>}
+          {placesError && <p className="text-xs text-destructive" role="alert">{placesError}</p>}
         </div>
       ) : !keyChecked ? (
         <div className="flex h-[220px] items-center justify-center rounded-xl border bg-card">
@@ -698,6 +701,7 @@ export function AirMapView({
             <Input
               value={customQuery}
               onChange={(e) => setCustomQuery(e.target.value)}
+              aria-label={lang === "en" ? `Search nearby places around ${place.name}` : `${place.name} के आसपास के स्थान खोजें`}
               placeholder={
                 lang === "en"
                   ? `Search near ${place.name} (e.g. 24-hour pharmacy, indoor kids play area, metro)`
@@ -713,7 +717,7 @@ export function AirMapView({
         </form>
 
         {groundedLoading && (
-          <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite">
             <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden />
             <span>
               {lang === "en"
@@ -724,7 +728,7 @@ export function AirMapView({
         )}
 
         {groundedError && (
-          <p className="mt-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive" data-testid="maps-grounded-error">
+          <p className="mt-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive" role="alert" data-testid="maps-grounded-error">
             {groundedError}
           </p>
         )}
@@ -737,7 +741,7 @@ export function AirMapView({
               </p>
             )}
             <div className="prose prose-sm max-w-none text-foreground/90 prose-headings:text-foreground prose-strong:text-foreground prose-a:text-primary">
-              <Markdown>{groundedResult.text}</Markdown>
+              <SafeMarkdown>{groundedResult.text}</SafeMarkdown>
             </div>
             <MapsSourcesList sources={groundedResult.sources} lang={lang} />
           </div>
