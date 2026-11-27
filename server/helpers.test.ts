@@ -6,13 +6,18 @@ import {
   extractMapsSources,
   extractWebSources,
   formatContextBlock,
+  isNonRetryableGeminiError,
+  isOriginAllowed,
   isSafeHttpUrl,
+  logAuditEvent,
   mapGeminiError,
   mapsExploreRequestSchema,
+  parseAllowedOrigins,
   sanitizeHistory,
   sanitizeInlineText,
   searchAlertsRequestSchema,
   validateLatLon,
+  withTimeoutAndRetry,
 } from "./helpers";
 
 describe("server input validation & sanitization", () => {
@@ -180,5 +185,91 @@ describe("grounding routing, Maps & Search source extraction, context formatting
     expect(limit("3.3.3.3", 300).allowed).toBe(true);
     // Window elapsed -> allowed again
     expect(limit("1.1.1.1", 1200).allowed).toBe(true);
+  });
+
+  it("parses allowed origins, validates Origin/Host matching, retries timeouts, and emits structured audit logs", async () => {
+    expect(parseAllowedOrigins(undefined)).toEqual([]);
+    expect(parseAllowedOrigins("https://a.example.com/, not-a-url, ftp://bad.example.com, http://localhost:3000")).toEqual([
+      "https://a.example.com",
+      "http://localhost:3000",
+    ]);
+
+    expect(isOriginAllowed(undefined, "example.com", [])).toBe(true);
+    expect(isOriginAllowed("https://a.example.com/", undefined, ["https://a.example.com"])).toBe(true);
+    expect(isOriginAllowed("https://evil.example.com", undefined, [])).toBe(false);
+    expect(isOriginAllowed("not-a-valid-url", "example.com", [])).toBe(false);
+    expect(isOriginAllowed("https://example.com", "example.com", [])).toBe(true);
+
+    expect(isNonRetryableGeminiError(new Error("GEMINI_API_KEY_MISSING"))).toBe(true);
+    expect(isNonRetryableGeminiError(new Error("400 INVALID_ARGUMENT"))).toBe(true);
+    expect(isNonRetryableGeminiError(new Error("503 service unavailable"))).toBe(false);
+    expect(sanitizeHistory("not-an-array")).toEqual([]);
+    expect(mapGeminiError(new Error("UPSTREAM_TIMEOUT")).status).toBe(504);
+
+    // Non-retryable error fails immediately on attempt 0
+    let attempts = 0;
+    await expect(
+      withTimeoutAndRetry(
+        async () => {
+          attempts += 1;
+          throw new Error("403 PERMISSION_DENIED");
+        },
+        { timeoutMs: 200, maxRetries: 2, baseDelayMs: 5 },
+      ),
+    ).rejects.toThrow("403");
+    expect(attempts).toBe(1);
+
+    const emitted: string[] = [];
+    logAuditEvent(
+      {
+        event: "upstream_failure",
+        requestId: "req-1",
+        method: "POST",
+        path: "/api/ask",
+        status: 502,
+        code: "UPSTREAM_ERROR",
+      },
+      (line) => emitted.push(line),
+    );
+    expect(JSON.parse(emitted[0]).level).toBe("error");
+  });
+
+  it("covers grounding extractor fallbacks, context formatting flags, and empty responses", () => {
+    expect(extractMapsSources({})).toEqual([]);
+    expect(extractWebSources({})).toEqual([]);
+
+    const maps = extractMapsSources({
+      candidates: [
+        {
+          groundingMetadata: {
+            groundingChunks: [
+              {
+                maps: {
+                  uri: "https://maps.google.com/?q=clinic",
+                  placeAnswerSources: {
+                    reviewSnippets: [{ text: "Helpful staff" }, { title: "" }],
+                  },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(maps[0].title).toBe("View on Google Maps");
+    expect(maps[0].reviewSnippets).toHaveLength(1);
+
+    const block = formatContextBlock(
+      { name: "Delhi", lat: 28.61, lon: 77.21 },
+      { aqi: 300, category: "poor", dominant: "PM2.5", pm25: 120, pm10: 200, worstWindow: "8 am–9 am" },
+      { olderAdult: true, pregnant: true, condition: true },
+    );
+    expect(block).toContain("older adults (60+)");
+    expect(block).toContain("someone is pregnant");
+    expect(block).toContain("asthma, COPD, or heart condition");
+    expect(block).toContain("Worst waking window today");
+
+    const plainBlock = formatContextBlock({ name: "Delhi", lat: 28.61, lon: 77.21 }, undefined, {});
+    expect(plainBlock).toContain("no special sensitivity flags");
   });
 });

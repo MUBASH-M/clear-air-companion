@@ -44,39 +44,51 @@ Built from the **Clear Air Companion Project Initiation Document v1.0** (23 Nove
 - **Knowledge library & safety layer.** Live in `client/src/lib/knowledge.ts` and `client/src/lib/companion.ts`. Deterministic emergency (112/108) and medical-refusal safety checks always run before any AI request.
 - **Privacy.** Household profile, logged actions, chat history, and group pledges stay in memory in the browser tab. Only approximate coordinates (~1 km) are sent to fetch air readings and local Maps-grounded answers.
 
-## Testing
+## Testing & Quality Gates
 
-The project uses **Vitest** with React (`@vitejs/plugin-react`), `@testing-library/react`, and `jsdom` (configured in `vitest.config.ts`), covering 55 unit tests across client hooks, core air quality math, companion guidance, and server security helpers:
+The project uses **Vitest** with V8 coverage (`>=90%` statements, branches, functions, and lines enforced in `vitest.config.ts`), **Supertest**, **axe-core** (automated WCAG 2.2 AA compliance in English & Hindi), and **Playwright** (`e2e/companion.spec.ts` across Chromium, Firefox, WebKit, and mobile Chrome):
 
-- `client/src/__tests__/use-companion-state.test.ts` — `useCompanionState` hook lifecycle, auto-detect vs. manual city precedence, language sync, `appStateReducer`, and ARIA tab keyboard navigation
-- `client/src/__tests__/hooks.test.ts` — `useToast` / toast reducer and `useIsMobile` responsive viewport hook
-- `client/src/__tests__/air.test.ts` — CPCB India AQI breakpoints, interpolation, category mapping, `fetchAir`, `searchPlaces`, and `resolveCurrentLocation` fallback chain
-- `client/src/__tests__/companion.test.ts` — `isSensitive`, `rankedTips`, `buildPlan`, `buildDailyGuidance`, bilingual emergency/medical `safetyCheck`, `extractProfile`, and offline `respond`
-- `client/src/__tests__/knowledge-and-ai.test.ts` — bilingual tip library integrity, safe HTTP URL validation, and grounded AI API wrappers
-- `server/helpers.test.ts` — Zod payload schemas, prompt sanitization, coordinate validation, Maps source extraction, Gemini error mapping, and rate limiting
+- `server/app.test.ts` & `server/helpers.test.ts` — full HTTP tests for `/api/health`, `/api/maps-config`, `/api/ask`, `/api/maps-explore`, `/api/search-alerts`, 404/400/403/413/429/502/503/504 handling, CORS allowlist, security headers, maintenance mode, timeouts/retries, and zero-PII audit logs
+- `client/src/__tests__/a11y.test.tsx` — automated `axe-core` WCAG 2.2 AA checks in English & Hindi, mathematical >=4.5:1 contrast checks, non-visual forecast `<table>` verification, XSS/unsafe-link neutralization, and Open-Meteo retry recovery
+- `client/src/__tests__/components.test.tsx` — `AirIndicesStrip`, `DailyPlan`, `Header`, `TipsView`, `AskView`, and `SurroundingAirMapCard`
+- `client/src/__tests__/air.test.ts`, `companion.test.ts`, `knowledge-and-ai.test.ts`, `use-companion-state.test.ts`, `hooks.test.ts` — India CPCB AQI engine, geolocation fallback chain, deterministic safety/planning/offline modules, and state lifecycle
+- `e2e/companion.spec.ts` — multi-browser Playwright end-to-end user journeys
 
 ## Environment Variables
 
 Copy `.env.example` to `.env` and configure:
 
-- `GEMINI_API_KEY` — Server-side Gemini API key used by `/api/ask` and `/api/maps-explore`.
-- `VITE_GOOGLE_MAPS_API_KEY` (or server-side `GOOGLE_MAPS_API_KEY`) — Google Maps Platform API key (restricted to Maps JavaScript API, Places API New, and Air Quality API) for the interactive map canvas and heatmap tiles.
+- `GEMINI_API_KEY` — Server-side Gemini API key used by `/api/ask`, `/api/maps-explore`, and `/api/search-alerts` (only key name supported; never exposed to the browser).
+- `GEMINI_MODEL` — Optional Gemini model override (defaults to `gemini-4-hydrogen`).
+- `VITE_GOOGLE_MAPS_API_KEY` (or server-side `GOOGLE_MAPS_API_KEY`) — HTTP-referrer-restricted Google Maps Platform API key for the interactive map canvas, surrounding AQI pins, and heatmap tiles.
+- `ALLOWED_ORIGINS`, `TRUST_PROXY`, `GEMINI_TIMEOUT_MS`, `MAINTENANCE_MODE` — Optional production CORS, proxy, timeout, and graceful maintenance controls (documented in `.env.example`).
 
 ## Run Locally
 
 ```bash
-npm install
-npm run dev         # Express + Vite dev server on http://localhost:3000
-npm test            # Run all 55 Vitest unit tests
-npm run test:watch  # Run Vitest in watch mode
-npm run lint        # TypeScript type check (tsc --noEmit)
-npm run build       # Builds client into dist/public
-npm start           # Serves production build + API routes via node server.ts
+npm ci                 # Locked install matching package-lock.json
+npm run dev            # Express + Vite dev server on http://localhost:3000
+npm run lint           # TypeScript strict check + ESLint (0 warnings allowed)
+npm test -- --coverage # Run all 97 Vitest tests with >=90% V8 coverage gate
+npm run build          # Builds client into dist/public
+npm run check:budget   # Enforces <=200 KB initial JS & <=250 KB max chunk gzip
+npm run test:e2e       # Playwright E2E suite (Chromium, Firefox, WebKit, Mobile)
+npm start              # Serves production build + API routes via node server.ts
 ```
+
+## Governance, Privacy & Operations
+
+- [Evidence Package (PDI-1 – PDI-10)](docs/EVIDENCE_PACKAGE.md)
+- [Privacy Policy & Data Governance](PRIVACY.md)
+- [Public Health Methodology & Safety Governance](docs/PUBLIC_HEALTH_METHODOLOGY.md)
+- [Production Operations Runbook](docs/OPERATIONS_RUNBOOK.md)
+- [Architecture Decision Records (`docs/adr/`)](docs/adr/001-server-side-gemini-proxy.md)
+- [Contributing Guidelines](CONTRIBUTING.md)
 
 ## Deployment
 
-- **Full-stack deployment:** Run `npm run build` followed by `npm start` (`node server.ts`), which serves both the compiled SPA and `/api/*` endpoints on port `3000` (or `process.env.PORT`).
+- **CI Quality Gate:** `.github/workflows/ci.yml` (SHA-pinned actions on Node 22) runs `npm ci`, `npm run lint`, `npm test -- --coverage`, `npm run build`, `npm run check:budget`, `npm audit --omit=dev --audit-level=high`, secret scanning, coverage artifact upload, and Playwright E2E.
+- **Full-stack deployment:** Run `npm run build` followed by `npm start` (`node server.ts`), which serves compressed, cache-optimized static assets and `/api/*` endpoints on port `3000` (or `process.env.PORT`).
 - **GitHub Pages (static preview):** Automated via `.github/workflows/deploy.yml` on pushes to `main`.
 
 ## Disclaimer

@@ -197,6 +197,35 @@ export function ProfileView({ lang, profile, update, clearAll, stored, place, lo
             <li>{L("Low-cost options first; no brands or paid placements.", "सस्ते विकल्प पहले; कोई ब्रांड या विज्ञापन नहीं।")}</li>
           </ul>
         </div>
+        <div className="rounded-xl border bg-card p-5 text-sm" data-testid="card-privacy-disclosure">
+          <h2 className="text-base font-semibold">{L("External services & retention", "बाहरी सेवाएँ और डेटा गोपनीयता")}</h2>
+          <ul className="mt-2 list-disc space-y-1.5 pl-4 text-xs leading-relaxed text-muted-foreground">
+            <li>
+              {L(
+                "Air & weather: Open-Meteo (CAMS model) receives only rounded ~1 km coordinates.",
+                "वायु और मौसम: Open-Meteo (CAMS मॉडल) को केवल ~1 किमी तक गोल निर्देशांक भेजे जाते हैं।",
+              )}
+            </li>
+            <li>
+              {L(
+                "Maps: Google Maps Platform loads only when the map view is active.",
+                "मानचित्र: Google Maps Platform केवल मानचित्र खुलने पर लोड होता है।",
+              )}
+            </li>
+            <li>
+              {L(
+                "AI assistant: prompts go through our server proxy; server logs record only status codes and latency, never your profile or prompt text.",
+                "AI सहायक: प्रश्न हमारे सर्वर प्रॉक्सी से जाते हैं; सर्वर लॉग में प्रोफ़ाइल या प्रश्न कभी दर्ज नहीं होते।",
+              )}
+            </li>
+            <li>
+              {L(
+                "Zero third-party analytics or ad trackers receive your household attributes.",
+                "कोई भी तृतीय-पक्ष एनालिटिक्स या विज्ञापन ट्रैकर आपका डेटा प्राप्त नहीं करता।",
+              )}
+            </li>
+          </ul>
+        </div>
       </div>
     </div>
   );

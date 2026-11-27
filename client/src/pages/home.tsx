@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart3,
@@ -11,26 +11,32 @@ import {
   Users,
 } from "lucide-react";
 import { AirIndicesStrip } from "@/components/AirIndicesStrip";
-import { AirMapView } from "@/components/AirMapView";
 import { AirPanel, LocationPendingCard } from "@/components/AirPanel";
-import { AskView } from "@/components/AskView";
-import { CommunityView } from "@/components/CommunityView";
 import { DailyPlan } from "@/components/DailyPlan";
 import { Header } from "@/components/Header";
-import { ImpactView } from "@/components/ImpactView";
-import { ProfileView } from "@/components/ProfileView";
-import { SurroundingAirMapCard } from "@/components/SurroundingAirMapCard";
-import { TipsView } from "@/components/TipsView";
 import { TodayView } from "@/components/TodayView";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCompanionState } from "@/hooks/use-companion-state";
 import { AirReport, fetchAir } from "@/lib/air";
 import { tr } from "@/lib/knowledge";
 import { TAB_ORDER, TabId, UI } from "@/lib/ui-copy";
+import { initWebVitalsMonitor } from "@/lib/vitals";
 
 export { DailyPlan, buildDailyPlanAdvice } from "@/components/DailyPlan";
 export type { DailyPlanAdviceItem } from "@/components/DailyPlan";
+
+// Route/tab-aware code splitting keeps initial JS well under the 200 KB gzip budget
+const SurroundingAirMapCard = lazy(() =>
+  import("@/components/SurroundingAirMapCard").then((m) => ({ default: m.SurroundingAirMapCard })),
+);
+const AirMapView = lazy(() => import("@/components/AirMapView").then((m) => ({ default: m.AirMapView })));
+const AskView = lazy(() => import("@/components/AskView").then((m) => ({ default: m.AskView })));
+const TipsView = lazy(() => import("@/components/TipsView").then((m) => ({ default: m.TipsView })));
+const ImpactView = lazy(() => import("@/components/ImpactView").then((m) => ({ default: m.ImpactView })));
+const CommunityView = lazy(() => import("@/components/CommunityView").then((m) => ({ default: m.CommunityView })));
+const ProfileView = lazy(() => import("@/components/ProfileView").then((m) => ({ default: m.ProfileView })));
 
 const TAB_ICONS: Record<TabId, typeof CalendarCheck> = {
   today: CalendarCheck,
@@ -41,6 +47,15 @@ const TAB_ICONS: Record<TabId, typeof CalendarCheck> = {
   community: Users,
   profile: UserCog,
 };
+
+function SectionFallback({ label }: { label: string }) {
+  return (
+    <div className="space-y-3" role="status" aria-live="polite" aria-label={label}>
+      <Skeleton className="h-8 w-56 rounded-lg" />
+      <Skeleton className="h-64 w-full rounded-xl" />
+    </div>
+  );
+}
 
 export default function Home() {
   const {
@@ -78,6 +93,8 @@ export default function Home() {
   const navRef = useRef<HTMLDivElement>(null);
   const pendingScroll = useRef(false);
 
+  useEffect(() => initWebVitalsMonitor(), []);
+
   const selectTab = useCallback(
     (id: TabId) => {
       pendingScroll.current = true;
@@ -100,8 +117,14 @@ export default function Home() {
     if (!pendingScroll.current || !el || window.innerWidth >= 1024) return;
     pendingScroll.current = false;
     const top = el.getBoundingClientRect().top + window.scrollY - 57;
-    if (window.scrollY < top - 4) requestAnimationFrame(() => window.scrollTo({ top, behavior: "smooth" }));
+    const prefersReduced =
+      typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (window.scrollY < top - 4) {
+      requestAnimationFrame(() => window.scrollTo({ top, behavior: prefersReduced ? "auto" : "smooth" }));
+    }
   }, [tab]);
+
+  const loadingLabel = lang === "en" ? "Loading section" : "अनुभाग लोड हो रहा है";
 
   return (
     <div className="min-h-screen bg-background">
@@ -191,14 +214,16 @@ export default function Home() {
               </div>
 
               <TabsContent value="today" id="tabpanel-today" className="mt-0 outline-none">
-                <SurroundingAirMapCard
-                  place={place}
-                  report={air.data}
-                  lang={lang}
-                  locating={locatingInitial}
-                  onSelectPlace={selectPlace}
-                  onOpenFullMap={() => selectTab("map")}
-                />
+                <Suspense fallback={<Skeleton className="mb-6 h-[340px] w-full rounded-xl" />}>
+                  <SurroundingAirMapCard
+                    place={place}
+                    report={air.data}
+                    lang={lang}
+                    locating={locatingInitial}
+                    onSelectPlace={selectPlace}
+                    onOpenFullMap={() => selectTab("map")}
+                  />
+                </Suspense>
                 <TodayView
                   q={air}
                   profile={profile}
@@ -216,53 +241,65 @@ export default function Home() {
 
               <TabsContent value="map" id="tabpanel-map" className="mt-0 outline-none">
                 {place ? (
-                  <AirMapView place={place} report={air.data ?? null} lang={lang} onSelectPlace={selectPlace} />
+                  <Suspense fallback={<SectionFallback label={loadingLabel} />}>
+                    <AirMapView place={place} report={air.data ?? null} lang={lang} onSelectPlace={selectPlace} />
+                  </Suspense>
                 ) : (
                   <LocationPendingCard locating={locatingInitial} lang={lang} onRetry={() => void autoDetectLocation(true)} />
                 )}
               </TabsContent>
 
               <TabsContent value="ask" id="tabpanel-ask" className="mt-0 outline-none">
-                <AskView
-                  place={place}
-                  locating={locatingInitial}
-                  report={air.data ?? null}
-                  profile={profile}
-                  lang={lang}
-                  messages={messages}
-                  setMessages={setMessages}
-                  updateProfile={updateProfile}
-                />
+                <Suspense fallback={<SectionFallback label={loadingLabel} />}>
+                  <AskView
+                    place={place}
+                    locating={locatingInitial}
+                    report={air.data ?? null}
+                    profile={profile}
+                    lang={lang}
+                    messages={messages}
+                    setMessages={setMessages}
+                    updateProfile={updateProfile}
+                  />
+                </Suspense>
               </TabsContent>
 
               <TabsContent value="tips" id="tabpanel-tips" className="mt-0 outline-none">
-                <TipsView profile={profile} lang={lang} done={done} toggleDone={toggleDone} />
+                <Suspense fallback={<SectionFallback label={loadingLabel} />}>
+                  <TipsView profile={profile} lang={lang} done={done} toggleDone={toggleDone} />
+                </Suspense>
               </TabsContent>
 
               <TabsContent value="impact" id="tabpanel-impact" className="mt-0 outline-none">
-                <ImpactView lang={lang} done={done} toggleDone={toggleDone} goTips={() => selectTab("tips")} />
+                <Suspense fallback={<SectionFallback label={loadingLabel} />}>
+                  <ImpactView lang={lang} done={done} toggleDone={toggleDone} goTips={() => selectTab("tips")} />
+                </Suspense>
               </TabsContent>
 
               <TabsContent value="community" id="tabpanel-community" className="mt-0 outline-none">
-                <CommunityView
-                  lang={lang}
-                  place={place}
-                  joined={joined}
-                  setJoined={setJoined}
-                  doneCount={stored.actions}
-                />
+                <Suspense fallback={<SectionFallback label={loadingLabel} />}>
+                  <CommunityView
+                    lang={lang}
+                    place={place}
+                    joined={joined}
+                    setJoined={setJoined}
+                    doneCount={stored.actions}
+                  />
+                </Suspense>
               </TabsContent>
 
               <TabsContent value="profile" id="tabpanel-profile" className="mt-0 outline-none">
-                <ProfileView
-                  lang={lang}
-                  profile={profile}
-                  update={updateProfile}
-                  place={place}
-                  locating={locatingInitial}
-                  clearAll={clearUserData}
-                  stored={stored}
-                />
+                <Suspense fallback={<SectionFallback label={loadingLabel} />}>
+                  <ProfileView
+                    lang={lang}
+                    profile={profile}
+                    update={updateProfile}
+                    place={place}
+                    locating={locatingInitial}
+                    clearAll={clearUserData}
+                    stored={stored}
+                  />
+                </Suspense>
               </TabsContent>
             </Tabs>
           </section>

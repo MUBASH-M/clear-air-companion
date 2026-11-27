@@ -211,3 +211,88 @@ describe("buildDailyPlanAdvice (DailyPlan card)", () => {
     expect(hiItems.find((i) => i.id === "windows")?.action).toBe("खिड़कियाँ बंद रखें");
   });
 });
+
+describe("Comprehensive offline-assistant, profile, and planning branch coverage", () => {
+  it("covers all extractProfile patterns and budget tiers", () => {
+    expect(extractProfile("I am expecting a baby and use kerosene stove")).toEqual({
+      pregnant: true,
+      fuel: "kerosene",
+    });
+    expect(extractProfile("I drive my car to work")).toEqual({ commute: "car" });
+    expect(extractProfile("I take the metro daily")).toEqual({ commute: "metro" });
+    expect(rankedTips(null, { ...DEFAULT_PROFILE, budget: "some" }).length).toBeGreaterThan(5);
+    expect(rankedTips(null, { ...DEFAULT_PROFILE, budget: "comfortable" }).length).toBeGreaterThan(5);
+  });
+
+  it("covers all buildPlan and buildDailyGuidance severity tiers in English and Hindi", () => {
+    const tiers: Array<[AirReport["category"], number]> = [
+      ["good", 30],
+      ["satisfactory", 80],
+      ["moderate", 150],
+      ["poor", 250],
+      ["very_poor", 350],
+      ["severe", 450],
+    ];
+    const profiles: Profile[] = [
+      DEFAULT_PROFILE,
+      { ...DEFAULT_PROFILE, children: true, olderAdult: true, pregnant: true, condition: true, commute: "auto", fuel: "kerosene", budget: "some" },
+      { ...DEFAULT_PROFILE, commute: "car", fuel: "induction", budget: "comfortable" },
+      { ...DEFAULT_PROFILE, commute: "home", fuel: "lpg" },
+    ];
+    for (const [category, aqi] of tiers) {
+      for (const lang of ["en", "hi"] as const) {
+        const rep = makeReport({ aqi, category, bestWindow: category === "good" ? null : makeReport().bestWindow, worstWindow: category === "good" ? null : makeReport().worstWindow });
+        for (const p of profiles) {
+          const plan = buildPlan(rep, p, lang);
+          expect(plan.items.length).toBeGreaterThanOrEqual(2);
+          const guidance = buildDailyGuidance(rep, p, lang);
+          expect(guidance.tips.length).toBeGreaterThanOrEqual(2);
+        }
+      }
+    }
+  });
+
+  it("covers every offline assistant intent in both English and Hindi with varying reports and profiles", () => {
+    const queries = [
+      "Should I send my child to school?",
+      "When should I open windows for fresh air?",
+      "Which N95 mask should I wear?",
+      "Can I get a cheap DIY air purifier?",
+      "Can I go for a run or exercise outside?",
+      "How to reduce kitchen cooking smoke on chulha?",
+      "Best way to commute by car or metro?",
+      "Why is there winter smog and stubble burning?",
+      "Do snake plants clean indoor air?",
+      "Is incense or mosquito coil bad?",
+      "Can I use an angithi heater in winter?",
+      "Air quality tips for a pregnant woman and baby",
+      "What can our RWA community society do?",
+      "How do you handle privacy and data?",
+      "How is the AQI air quality today?",
+      "Hello namaste",
+      "Unrelated random question about chess",
+    ];
+    const reports: Array<AirReport | null> = [
+      makeReport({ aqi: 420, category: "severe" }),
+      makeReport({ aqi: 240, category: "poor", bestWindow: null }),
+      makeReport({ aqi: 40, category: "good" }),
+      null,
+    ];
+    const sensitiveProfile: Profile = {
+      ...DEFAULT_PROFILE,
+      condition: true,
+      fuel: "wood",
+      commute: "car",
+      budget: "comfortable",
+    };
+
+    for (const lang of ["en", "hi"] as const) {
+      for (const q of queries) {
+        for (const rep of reports) {
+          const msg = respond(q, rep, rep ? sensitiveProfile : DEFAULT_PROFILE, lang);
+          expect(msg.text.length).toBeGreaterThan(10);
+        }
+      }
+    }
+  });
+});

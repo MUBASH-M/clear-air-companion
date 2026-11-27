@@ -1,18 +1,16 @@
+import { Suspense, lazy } from "react";
 import { UseQueryResult } from "@tanstack/react-query";
-import { Bar, BarChart, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { AlertTriangle, Info, LocateFixed, RefreshCw, Wind } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AirReport, CATEGORIES, CategoryKey, fmtHour } from "@/lib/air";
+import { AirReport, CATEGORIES, fmtHour } from "@/lib/air";
 import { Lang, tr } from "@/lib/knowledge";
 import { UI } from "@/lib/ui-copy";
 
-type ChartTooltipPayload = {
-  payload?: {
-    category?: CategoryKey;
-  };
-};
+const LazyForecastChart = lazy(() =>
+  import("@/components/ForecastChart").then((m) => ({ default: m.ForecastChart })),
+);
 
 function AqiDial({ aqi, color, categoryLabel, lang }: { aqi: number; color: string; categoryLabel: string; lang: Lang }) {
   const pct = Math.min(aqi, 500) / 500;
@@ -249,27 +247,29 @@ export function AirPanel({ q, lang, t, hasPlace, locating, locError, onRetry }: 
             </span>
           </p>
           <div className="mt-2 h-32" role="region" aria-label={forecastSummary} data-testid="chart-forecast">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} margin={{ top: 8, right: 4, bottom: 0, left: 0 }}>
-                <XAxis dataKey="label" interval={5} tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} width={34} />
-                <ReferenceLine y={200} stroke="hsl(var(--border))" strokeDasharray="3 3" />
-                <Tooltip
-                  cursor={{ fill: "hsl(var(--muted))" }}
-                  contentStyle={{ borderRadius: 8, border: "1px solid hsl(var(--border))", fontSize: 12, background: "hsl(var(--popover))" }}
-                  formatter={(v: number, _name, item: ChartTooltipPayload) => {
-                    const key = item?.payload?.category;
-                    const label = key && CATEGORIES[key] ? tr(CATEGORIES[key], lang) : "";
-                    return [label ? `${v} · ${label}` : String(v), "AQI"];
-                  }}
-                />
-                <Bar dataKey="aqi" radius={[3, 3, 0, 0]} isAnimationActive={false}>
-                  {chartData.map((p) => (
-                    <Cell key={p.time} fill={CATEGORIES[p.category].color} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<Skeleton className="h-32 w-full rounded-md" />}>
+              <LazyForecastChart data={chartData} lang={lang} />
+            </Suspense>
+            {/* Non-visual textual alternative for assistive technologies */}
+            <table className="sr-only" data-testid="table-forecast-a11y">
+              <caption>{forecastSummary}</caption>
+              <thead>
+                <tr>
+                  <th scope="col">{lang === "en" ? "Hour" : "समय"}</th>
+                  <th scope="col">{lang === "en" ? "Estimated AQI" : "अनुमानित AQI"}</th>
+                  <th scope="col">{lang === "en" ? "Category" : "श्रेणी"}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {chartData.map((p) => (
+                  <tr key={p.time}>
+                    <td>{p.label}</td>
+                    <td>{p.aqi}</td>
+                    <td>{tr(CATEGORIES[p.category], lang)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
           <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
@@ -302,7 +302,16 @@ export function AirPanel({ q, lang, t, hasPlace, locating, locError, onRetry }: 
               day: "numeric",
               month: "short",
             })}{" "}
-            ({lang === "en" ? "local time" : "स्थानीय समय"}). {t(UI.source)}
+            ({lang === "en" ? "local time" : "स्थानीय समय"}). {t(UI.source)}{" "}
+            <a
+              href="https://airquality.cpcb.gov.in/AQI_India/"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="link-cpcb-official"
+              className="rounded-sm font-medium text-foreground underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {lang === "en" ? "Verify official CPCB stations" : "आधिकारिक CPCB स्टेशन देखें"}
+            </a>
           </span>
         </p>
       </CardContent>

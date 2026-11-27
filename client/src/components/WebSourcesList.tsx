@@ -26,7 +26,7 @@ export function WebSourcesList({ sources, lang, compact = false }: WebSourcesLis
       </p>
       <ul className={compact ? "space-y-1.5" : "grid gap-2 sm:grid-cols-2"}>
         {safeSources.map((src) => {
-          let host = "";
+          let host: string;
           try {
             host = new URL(src.uri).hostname.replace(/^www\./, "");
           } catch {

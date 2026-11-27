@@ -18,6 +18,39 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("/recharts/") || id.includes("/d3-") || id.includes("/victory-vendor/")) {
+            return "vendor-charts";
+          }
+          if (id.includes("/@vis.gl/react-google-maps/")) return "vendor-maps";
+          if (
+            id.includes("/react-markdown/") ||
+            id.includes("/remark-") ||
+            id.includes("/rehype-") ||
+            id.includes("/micromark") ||
+            id.includes("/mdast-") ||
+            id.includes("/unist-")
+          ) {
+            return "vendor-markdown";
+          }
+          if (id.includes("/lucide-react/")) return "vendor-icons";
+          if (
+            id.includes("/react-dom/") ||
+            id.includes("/react/") ||
+            id.includes("/scheduler/") ||
+            id.includes("/clsx/") ||
+            id.includes("/tailwind-merge/") ||
+            id.includes("/class-variance-authority/")
+          ) {
+            return "vendor-react";
+          }
+          return undefined;
+        },
+      },
+    },
   },
   server: {
     fs: {

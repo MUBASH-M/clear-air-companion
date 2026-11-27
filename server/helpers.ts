@@ -54,10 +54,17 @@ export type WebGroundingSource = {
   uri: string;
 };
 
-const CONTROL_CHARS_RE = /[\u0000-\u001F\u007F]+/g;
+function stripControlChars(value: string): string {
+  let out = "";
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    out += code <= 0x1f || code === 0x7f ? " " : value[i];
+  }
+  return out;
+}
 
 export function sanitizeInlineText(value: string, maxLen: number): string {
-  return value.replace(CONTROL_CHARS_RE, " ").replace(/\s+/g, " ").trim().slice(0, maxLen);
+  return stripControlChars(value).replace(/\s+/g, " ").trim().slice(0, maxLen);
 }
 
 export function isSafeHttpUrl(value: unknown): value is string {
@@ -316,6 +323,14 @@ export function mapGeminiError(err: unknown): { status: number; code: string; er
     };
   }
 
+  if (message === "UPSTREAM_TIMEOUT") {
+    return {
+      status: 504,
+      code: "UPSTREAM_TIMEOUT",
+      error: "The assistant took too long to respond. Please try again in a moment.",
+    };
+  }
+
   const lower = message.toLowerCase();
   if (lower.includes("403") || lower.includes("permission_denied") || lower.includes("api_key_invalid")) {
     return {
@@ -339,7 +354,126 @@ export function mapGeminiError(err: unknown): { status: number; code: string; er
   };
 }
 
-export function createRateLimiter(options: { windowMs: number; maxRequests: number; maxEntries?: number }) {
+export function isNonRetryableGeminiError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  if (message === "GEMINI_API_KEY_MISSING") return true;
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("400") ||
+    lower.includes("401") ||
+    lower.includes("403") ||
+    lower.includes("404") ||
+    lower.includes("429") ||
+    lower.includes("invalid_argument") ||
+    lower.includes("permission_denied") ||
+    lower.includes("api_key_invalid") ||
+    lower.includes("resource_exhausted")
+  );
+}
+
+/**
+ * Runs an async provider call with a per-attempt timeout and bounded exponential backoff.
+ * Non-retryable client/auth/quota errors fail immediately without amplifying load.
+ */
+export async function withTimeoutAndRetry<T>(
+  operation: () => Promise<T>,
+  options: { timeoutMs?: number; maxRetries?: number; baseDelayMs?: number } = {},
+): Promise<T> {
+  const { timeoutMs = 15_000, maxRetries = 1, baseDelayMs = 250 } = options;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          operation(),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error("UPSTREAM_TIMEOUT")), timeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    } catch (err) {
+      lastError = err;
+      if (attempt >= maxRetries || isNonRetryableGeminiError(err)) {
+        throw err;
+      }
+      const delay = baseDelayMs * 2 ** attempt;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError;
+}
+
+export function parseAllowedOrigins(raw?: string): string[] {
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((item) => item.trim().replace(/\/+$/, ""))
+    .filter((item) => {
+      try {
+        const parsed = new URL(item);
+        return parsed.protocol === "https:" || parsed.protocol === "http:";
+      } catch {
+        return false;
+      }
+    });
+}
+
+export function isOriginAllowed(
+  originHeader: string | undefined,
+  hostHeader: string | undefined,
+  allowedOrigins: string[],
+): boolean {
+  // Requests with no Origin header (same-origin navigations, curl, health probes) are permitted.
+  if (!originHeader) return true;
+  const normalized = originHeader.trim().replace(/\/+$/, "");
+  if (allowedOrigins.includes(normalized)) return true;
+  if (!hostHeader) return false;
+  try {
+    const parsed = new URL(normalized);
+    return parsed.host.toLowerCase() === hostHeader.trim().toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+export type AuditEvent = {
+  event:
+    | "cors_rejected"
+    | "rate_limited"
+    | "malformed_json"
+    | "payload_too_large"
+    | "invalid_request"
+    | "upstream_failure"
+    | "maintenance_rejected"
+    | "unhandled_error";
+  requestId: string;
+  method: string;
+  path: string;
+  status: number;
+  code: string;
+};
+
+/**
+ * Emits privacy-safe structured audit logs (zero PII, zero user prompts, zero household attributes).
+ */
+export function logAuditEvent(entry: AuditEvent, sink: (line: string) => void = console.warn): void {
+  sink(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      level: entry.status >= 500 ? "error" : "warn",
+      ...entry,
+    }),
+  );
+}
+
+export type RateLimitCheckFn = (key: string, now?: number) => { allowed: boolean; retryAfterSec: number };
+
+export function createRateLimiter(options: { windowMs: number; maxRequests: number; maxEntries?: number }): RateLimitCheckFn {
   const { windowMs, maxRequests, maxEntries = 500 } = options;
   const buckets = new Map<string, number[]>();
 

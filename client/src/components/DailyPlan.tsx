@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { CalendarCheck, Clock, DoorClosed, Dumbbell, ShieldCheck, SlidersHorizontal, Wind } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -226,6 +227,11 @@ export function DailyPlan({
   activeTab,
   onAction,
 }: DailyPlanProps) {
+  const items = useMemo(
+    () => (report ? buildDailyPlanAdvice(report, profile, lang) : []),
+    [report, profile, lang],
+  );
+
   if ((!hasPlace && locating) || isLoading) {
     return (
       <Card className="mb-6 shadow-none" role="status" aria-live="polite" data-testid="daily-plan-loading">
@@ -244,7 +250,6 @@ export function DailyPlan({
 
   if (!report) return null;
 
-  const items = buildDailyPlanAdvice(report, profile, lang);
   const cat = CATEGORIES[report.category];
   const catLabel = tr(cat, lang);
   const sensitive = isSensitive(profile);

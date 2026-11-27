@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Activity, AppWindow, HeartPulse, Shield, ShieldCheck, SlidersHorizontal, Wind } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AirReport, CATEGORIES } from "@/lib/air";
@@ -22,7 +23,7 @@ type DailyGuidanceCardProps = {
 };
 
 export function DailyGuidanceCard({ report, profile, profileTouched, lang, onPersonalise }: DailyGuidanceCardProps) {
-  const guidance = buildDailyGuidance(report, profile, lang);
+  const guidance = useMemo(() => buildDailyGuidance(report, profile, lang), [report, profile, lang]);
   const category = CATEGORIES[report.category];
   const L = (en: string, hi: string) => (lang === "en" ? en : hi);
 

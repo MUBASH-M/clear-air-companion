@@ -1,0 +1,85 @@
+name: CI Quality Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    name: Lint, Coverage (>=90%), Build & Security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies (locked)
+        run: npm ci
+
+      - name: TypeScript & ESLint (zero warnings)
+        run: npm run lint
+
+      - name: Run unit, API, security & accessibility tests with coverage
+        run: npm test -- --coverage
+
+      - name: Production build
+        run: npm run build
+
+      - name: Verify bundle size budgets (<200 KB initial / <250 KB max chunk gzip)
+        run: npm run check:budget
+
+      - name: Dependency vulnerability check (fail on high/critical)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Secret pattern scan
+        run: |
+          if grep -rnE "(AIza[0-9A-Za-z_-]{35}|sk-[A-Za-z0-9]{32,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY)" client server shared server.ts .env.example; then
+            echo "Potential hardcoded secret detected!"
+            exit 1
+          fi
+          echo "Secret pattern scan passed."
+
+      - name: Upload coverage report artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vitest-coverage-report
+          path: coverage/
+          retention-days: 14
+
+  e2e-smoke:
+    name: Playwright E2E (Chromium, Firefox, WebKit)
+    runs-on: ubuntu-latest
+    needs: quality-gate
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx --yes playwright install --with-deps chromium firefox webkit
+
+      - name: Run Playwright E2E suite
+        run: npx --yes playwright test

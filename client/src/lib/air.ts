@@ -90,6 +90,37 @@ const mean = (xs: number[]) => {
   return v.length ? v.reduce((a, b) => a + b, 0) / v.length : NaN;
 };
 
+const RETRYABLE_HTTP_STATUSES = new Set([429, 502, 503, 504]);
+
+/**
+ * Fetches a URL with an AbortController timeout and bounded exponential-backoff
+ * retry on transient network or 5xx/429 errors.
+ */
+async function fetchWithRetry(
+  url: string,
+  { timeoutMs = 8000, maxRetries = 1, baseDelayMs = 150 } = {},
+): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      if (!RETRYABLE_HTTP_STATUSES.has(res.status) || attempt === maxRetries) {
+        return res;
+      }
+      lastErr = new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      lastErr = err;
+      if (attempt === maxRetries) throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+    await new Promise((resolve) => setTimeout(resolve, baseDelayMs * 2 ** attempt));
+  }
+  throw lastErr;
+}
+
 export async function fetchAir(place: Place): Promise<AirReport> {
   const aqUrl =
     `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${place.lat}&longitude=${place.lon}` +
@@ -98,7 +129,10 @@ export async function fetchAir(place: Place): Promise<AirReport> {
     `https://api.open-meteo.com/v1/forecast?latitude=${place.lat}&longitude=${place.lon}` +
     `&current=temperature_2m,relative_humidity_2m,wind_speed_10m&timezone=auto`;
 
-  const [aqRes, wxRes] = await Promise.all([fetch(aqUrl), fetch(wxUrl)]);
+  const [aqRes, wxRes] = await Promise.all([
+    fetchWithRetry(aqUrl),
+    fetchWithRetry(wxUrl).catch(() => new Response(null, { status: 503 })),
+  ]);
   if (!aqRes.ok) throw new Error("Air quality service did not respond");
   const aq = await aqRes.json();
   const wx = wxRes.ok ? await wxRes.json() : null;
@@ -229,7 +263,7 @@ export async function fetchSurroundingAirPins(place: Place, lang: "en" | "hi" = 
     `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lats}&longitude=${lons}` +
     `&current=pm2_5,pm10,nitrogen_dioxide&timezone=auto`;
 
-  const res = await fetch(url);
+  const res = await fetchWithRetry(url);
   if (!res.ok) throw new Error("Surrounding air quality service did not respond");
   const raw = (await res.json()) as OpenMeteoBatchCurrent | OpenMeteoBatchCurrent[];
   const rows = Array.isArray(raw) ? raw : [raw];
@@ -237,9 +271,9 @@ export async function fetchSurroundingAirPins(place: Place, lang: "en" | "hi" = 
   return points
     .map((pt, idx): SurroundingAirPin | null => {
       const cur = rows[idx]?.current;
-      const pm25 = Number(cur?.pm2_5);
-      const pm10 = Number(cur?.pm10);
-      const no2 = Number(cur?.nitrogen_dioxide);
+      const pm25 = Number(cur?.pm2_5 ?? NaN);
+      const pm10 = Number(cur?.pm10 ?? NaN);
+      const no2 = Number(cur?.nitrogen_dioxide ?? NaN);
       if (!Number.isFinite(pm25) && !Number.isFinite(pm10)) return null;
       const safePm25 = Number.isFinite(pm25) ? pm25 : 0;
       const safePm10 = Number.isFinite(pm10) ? pm10 : 0;

@@ -32,6 +32,7 @@ export function Header({ lang, setLang, place, setPlace, locatingInitial, t }: H
   const [locError, setLocError] = useState("");
   const boxRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (q.trim().length < 2) {
@@ -46,6 +47,7 @@ export function Header({ lang, setLang, place, setPlace, locatingInitial, t }: H
 
   useEffect(() => {
     if (!open) return;
+    searchInputRef.current?.focus();
     const onDoc = (e: MouseEvent) => {
       if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
     };
@@ -138,7 +140,7 @@ export function Header({ lang, setLang, place, setPlace, locatingInitial, t }: H
               <div className="relative">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" aria-hidden />
                 <Input
-                  autoFocus
+                  ref={searchInputRef}
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
                   placeholder={t(UI.searchCity)}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Check } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -79,7 +79,7 @@ type TipsViewProps = {
 
 export function TipsView({ profile, lang, done, toggleDone }: TipsViewProps) {
   const [filter, setFilter] = useState<"all" | TipKind>("all");
-  const tips = rankedTips(filter === "all" ? null : [filter], profile);
+  const tips = useMemo(() => rankedTips(filter === "all" ? null : [filter], profile), [filter, profile]);
   const max = profile.budget === "tight" ? 1 : profile.budget === "some" ? 2 : 3;
   const kinds: ("all" | TipKind)[] = ["all", "indoor", "travel", "cooking", "heating", "waste", "shopping"];
 

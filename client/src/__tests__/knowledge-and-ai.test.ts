@@ -166,4 +166,129 @@ describe("AI client API wrappers", () => {
       exploreNearbyWithMaps({ query: "pharmacy", lang: "hi", place: samplePlace, report: null }),
     ).rejects.toThrow("फ़ुल-स्टैक सर्वर आवश्यक है");
   });
+
+  it("serializes live AirReport context and handles all remaining success/error branches in ai.ts", async () => {
+    const sampleReport = {
+      place: samplePlace,
+      fetchedAt: new Date("2026-11-27T08:00:00Z"),
+      observedAt: "2026-11-27T08:00",
+      aqi: 210,
+      category: "poor" as const,
+      dominant: "PM2.5",
+      pm25: 98,
+      pm10: 160,
+      no2: 34,
+      pm25Avg24: 95,
+      pm10Avg24: 155,
+      temperature: 24,
+      humidity: 55,
+      wind: 6,
+      next24: [],
+      bestWindow: { start: "2026-11-27T14:00", end: "2026-11-27T16:00", aqi: 140 },
+      worstWindow: { start: "2026-11-27T08:00", end: "2026-11-27T10:00", aqi: 240 },
+      peakToday: 240,
+    };
+
+    // exploreNearbyWithMaps success with report
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            text: "Nearby clinic found.",
+            sources: [{ title: "Clinic", uri: "https://maps.google.com/?q=clinic", reviewSnippets: [] }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    const exploreOk = await exploreNearbyWithMaps({
+      query: "clinic",
+      lang: "en",
+      place: samplePlace,
+      report: sampleReport,
+    });
+    expect(exploreOk.text).toBe("Nearby clinic found.");
+    expect(exploreOk.groundingUsed).toBe("maps");
+
+    // Non-JSON / 404 errors in English for ask, explore, and search-alerts
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<html>404</html>", { status: 404, headers: { "Content-Type": "text/html" } })),
+    );
+    await expect(
+      askGroundedAssistant({
+        message: "Hi",
+        lang: "en",
+        place: samplePlace,
+        report: { ...sampleReport, bestWindow: null, worstWindow: null },
+        profile: DEFAULT_PROFILE,
+        history: [],
+      }),
+    ).rejects.toThrow("full-stack server");
+    await expect(
+      askGroundedAssistant({
+        message: "Hi",
+        lang: "hi",
+        place: samplePlace,
+        report: null,
+        profile: DEFAULT_PROFILE,
+        history: [],
+      }),
+    ).rejects.toThrow("फ़ुल-स्टैक सर्वर");
+    await expect(
+      exploreNearbyWithMaps({ query: "park", lang: "en", place: samplePlace, report: null }),
+    ).rejects.toThrow("full-stack server");
+    await expect(
+      fetchLiveAirAdvisories({ lang: "en", place: samplePlace, report: null }),
+    ).rejects.toThrow("full-stack server");
+
+    // 500 JSON errors without custom message fallback
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({}), { status: 500, headers: { "Content-Type": "application/json" } })),
+    );
+    await expect(
+      askGroundedAssistant({
+        message: "Hi",
+        lang: "en",
+        place: samplePlace,
+        report: null,
+        profile: DEFAULT_PROFILE,
+        history: [],
+      }),
+    ).rejects.toThrow("Request failed (500)");
+    await expect(
+      exploreNearbyWithMaps({ query: "park", lang: "en", place: samplePlace, report: null }),
+    ).rejects.toThrow("Request failed (500)");
+    await expect(
+      fetchLiveAirAdvisories({ lang: "en", place: samplePlace, report: null }),
+    ).rejects.toThrow("Request failed (500)");
+
+    // Malformed JSON bodies with JSON content-type trigger .catch(() => ({})) fallbacks
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("not-json", { status: 200, headers: { "Content-Type": "application/json" } })),
+    );
+    const askEmpty = await askGroundedAssistant({
+      message: "Hi",
+      lang: "en",
+      place: samplePlace,
+      report: null,
+      profile: DEFAULT_PROFILE,
+      history: [],
+    });
+    expect(askEmpty).toEqual({ text: "", sources: [], webSources: [], groundingUsed: undefined });
+
+    const exploreEmpty = await exploreNearbyWithMaps({
+      query: "park",
+      lang: "en",
+      place: samplePlace,
+      report: null,
+    });
+    expect(exploreEmpty).toEqual({ text: "", sources: [], webSources: [], groundingUsed: "maps" });
+
+    const alertsEmpty = await fetchLiveAirAdvisories({ lang: "en", place: samplePlace, report: null });
+    expect(alertsEmpty).toEqual({ text: "", webSources: [] });
+  });
 });

@@ -4,6 +4,7 @@ import {
   PRESET_PLACES,
   buildSurroundingGrid,
   categoryFor,
+  detectCurrentLocation,
   fetchAir,
   fetchSurroundingAirPins,
   fmtHour,
@@ -341,5 +342,133 @@ describe("buildSurroundingGrid & fetchSurroundingAirPins", () => {
     expect(pins[0].isCenter).toBe(true);
     expect(pins[0].category).toBe("good");
     expect(pins[8].aqi).toBeGreaterThan(pins[0].aqi);
+  });
+
+  it("throws when surrounding pins upstream fails and handles single-object/partial rows", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("Error", { status: 500 })));
+    await expect(fetchSurroundingAirPins(PRESET_PLACES[0], "en")).rejects.toThrow(
+      "Surrounding air quality service did not respond",
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ current: { pm2_5: 55, pm10: Number.NaN } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    const partial = await fetchSurroundingAirPins(PRESET_PLACES[0], "hi");
+    expect(partial).toHaveLength(1);
+    expect(partial[0].pm25).toBe(55);
+  });
+});
+
+describe("detectCurrentLocation browser + IP geolocation flows", () => {
+  it("uses browser geolocation + Nominatim reverse geocode when granted", async () => {
+    vi.stubGlobal("navigator", {
+      permissions: { query: vi.fn(async () => ({ state: "granted" })) },
+      geolocation: {
+        getCurrentPosition: vi.fn((ok: (p: { coords: { latitude: number; longitude: number } }) => void) =>
+          ok({ coords: { latitude: 28.6139, longitude: 77.209 } }),
+        ),
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ address: { city: "New Delhi", state: "Delhi", country: "India" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    const place = await detectCurrentLocation("en");
+    expect(place.name).toBe("New Delhi");
+    expect(place.approx).toBe("gps");
+  });
+
+  it("falls back from geojs to ipinfo when browser geolocation is denied and primary IP fails", async () => {
+    vi.stubGlobal("navigator", {
+      permissions: { query: vi.fn(async () => ({ state: "denied" })) },
+    });
+
+    // Primary geojs success
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        if (String(url).includes("geojs.io")) {
+          return new Response(
+            JSON.stringify({ city: "Lucknow", region: "Uttar Pradesh", country: "India", latitude: 26.85, longitude: 80.95 }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response("err", { status: 500 });
+      }),
+    );
+    const geojsPlace = await detectCurrentLocation("en");
+    expect(geojsPlace.name).toBe("Lucknow");
+    expect(geojsPlace.approx).toBe("ip");
+
+    // geojs fails -> ipinfo fallback succeeds
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        if (String(url).includes("ipinfo.io")) {
+          return new Response(
+            JSON.stringify({ city: "Jaipur", region: "Rajasthan", country: "India", loc: "26.91,75.79" }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response("err", { status: 500 });
+      }),
+    );
+    const ipinfoPlace = await detectCurrentLocation("hi");
+    expect(ipinfoPlace.name).toBe("Jaipur");
+    expect(ipinfoPlace.approx).toBe("ip");
+
+    // Both IP providers fail -> throws
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("err", { status: 500 })));
+    await expect(detectCurrentLocation("en")).rejects.toThrow("Could not determine location");
+
+    // Permission query throws + geolocation unavailable + reverseGeocode error
+    vi.stubGlobal("navigator", {
+      permissions: { query: vi.fn(async () => { throw new Error("unsupported"); }) },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        if (String(url).includes("geojs.io")) {
+          return new Response(JSON.stringify({ latitude: 28.61, longitude: 77.21 }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response("err", { status: 500 });
+      }),
+    );
+    const anonIp = await detectCurrentLocation("hi");
+    expect(anonIp.name).toBe("आपके पास");
+    expect(anonIp.region).toBe("नेटवर्क से अनुमानित");
+
+    // Surrounding pins skips null rows and handles missing pm2_5 with valid pm10
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify([
+            { current: { pm2_5: null, pm10: null } },
+            { current: { pm2_5: Number.NaN, pm10: 95, nitrogen_dioxide: Number.NaN } },
+          ]),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    const filteredPins = await fetchSurroundingAirPins(PRESET_PLACES[0], "en");
+    expect(filteredPins).toHaveLength(1);
+    expect(filteredPins[0].pm10).toBe(95);
+    expect(filteredPins[0].no2).toBe(0);
   });
 });

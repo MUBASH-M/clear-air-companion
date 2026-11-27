@@ -83,10 +83,7 @@ export function useCompanionState(options: UseCompanionStateOptions = {}) {
     dispatch({ type: "CLEAR_USER_DATA" });
   }, []);
 
-  const stored = useMemo(
-    () => getStoredCounts(state),
-    [state.done, state.messages, state.joined],
-  );
+  const stored = useMemo(() => getStoredCounts(state), [state]);
 
   return {
     state,

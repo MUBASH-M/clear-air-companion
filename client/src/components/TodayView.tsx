@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { UseQueryResult } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -20,13 +20,16 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DailyGuidanceCard } from "@/components/DailyGuidanceCard";
 import { LocationPendingCard } from "@/components/AirPanel";
-import { SafeMarkdown } from "@/components/SafeMarkdown";
 import { WebSourcesList } from "@/components/WebSourcesList";
 import { AirReport } from "@/lib/air";
 import { WebGroundingSource, fetchLiveAirAdvisories } from "@/lib/ai";
 import { PlanItem, Profile, buildPlan, isSensitive } from "@/lib/companion";
 import { Lang, fx } from "@/lib/knowledge";
 import { DoneAction, UI } from "@/lib/ui-copy";
+
+const LazySafeMarkdown = lazy(() =>
+  import("@/components/SafeMarkdown").then((m) => ({ default: m.SafeMarkdown })),
+);
 
 const ICONS: Record<PlanItem["icon"], typeof Sun> = {
   sun: Sun,
@@ -101,6 +104,11 @@ export function TodayView({
     }
   };
 
+  const plan = useMemo(
+    () => (q.data ? buildPlan(q.data, profile, lang) : null),
+    [q.data, profile, lang],
+  );
+
   if ((!hasPlace && locating) || q.isLoading) {
     return (
       <div className="space-y-3" role="status" aria-live="polite" aria-label={lang === "en" ? "Loading daily plan" : "दैनिक योजना लोड हो रही है"}>
@@ -113,7 +121,7 @@ export function TodayView({
   if (!hasPlace) {
     return <LocationPendingCard locating={false} lang={lang} onRetry={onRetryLocate} />;
   }
-  if (!q.data) {
+  if (!q.data || !plan) {
     return (
       <p className="text-sm text-muted-foreground">
         {lang === "en" ? "Your plan will appear once air data loads." : "वायु डेटा लोड होने पर आपकी योजना दिखेगी।"}
@@ -121,7 +129,6 @@ export function TodayView({
     );
   }
 
-  const plan = buildPlan(q.data, profile, lang);
   // Use the location's local date (from the reading), not the visitor's device date
   const [yy, mm, dd] = q.data.observedAt.slice(0, 10).split("-").map(Number);
   const today = new Date(Date.UTC(yy, mm - 1, dd)).toLocaleDateString(lang === "en" ? "en-IN" : "hi-IN", {
@@ -221,7 +228,9 @@ export function TodayView({
           {advisory && !advisoryLoading && (
             <div className="mt-3 border-t pt-3" data-testid="advisories-result">
               <div className="prose prose-sm max-w-none text-foreground prose-p:my-1.5 prose-ul:my-1.5 prose-li:my-0.5 prose-strong:text-foreground prose-a:text-primary">
-                <SafeMarkdown>{advisory.text}</SafeMarkdown>
+                <Suspense fallback={<Skeleton className="h-16 w-full" />}>
+                  <LazySafeMarkdown>{advisory.text}</LazySafeMarkdown>
+                </Suspense>
               </div>
               <WebSourcesList sources={advisory.webSources} lang={lang} />
             </div>
