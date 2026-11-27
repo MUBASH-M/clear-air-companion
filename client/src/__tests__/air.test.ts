@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CATEGORIES,
   PRESET_PLACES,
+  buildSurroundingGrid,
   categoryFor,
   fetchAir,
+  fetchSurroundingAirPins,
   fmtHour,
   indiaAqi,
   resolveCurrentLocation,
@@ -284,5 +286,42 @@ describe("resolveCurrentLocation", () => {
         locateByIp: async () => null,
       }),
     ).rejects.toThrow("Could not determine location");
+  });
+});
+
+describe("buildSurroundingGrid & fetchSurroundingAirPins", () => {
+  it("builds a 9-point center + surrounding ring grid with localized labels", () => {
+    const enGrid = buildSurroundingGrid(PRESET_PLACES[0], "en");
+    expect(enGrid).toHaveLength(9);
+    expect(enGrid[0].isCenter).toBe(true);
+    expect(enGrid[0].label).toBe("New Delhi");
+    expect(enGrid.find((p) => p.id === "n")?.lat).toBeGreaterThan(PRESET_PLACES[0].lat);
+    expect(enGrid.find((p) => p.id === "s")?.lat).toBeLessThan(PRESET_PLACES[0].lat);
+    expect(enGrid.find((p) => p.id === "e")?.lon).toBeGreaterThan(PRESET_PLACES[0].lon);
+    expect(enGrid.find((p) => p.id === "w")?.lon).toBeLessThan(PRESET_PLACES[0].lon);
+
+    const hiGrid = buildSurroundingGrid(PRESET_PLACES[0], "hi");
+    expect(hiGrid.find((p) => p.id === "n")?.label).toBe("New Delhi · उत्तर");
+  });
+
+  it("fetches and parses batch surrounding AQI pins in a single request", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify(
+          Array.from({ length: 9 }, (_, i) => ({
+            current: { pm2_5: 25 + i * 15, pm10: 40 + i * 20, nitrogen_dioxide: 20 + i * 3 },
+          })),
+        ),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pins = await fetchSurroundingAirPins(PRESET_PLACES[0], "en");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(pins).toHaveLength(9);
+    expect(pins[0].isCenter).toBe(true);
+    expect(pins[0].category).toBe("good");
+    expect(pins[8].aqi).toBeGreaterThan(pins[0].aqi);
   });
 });

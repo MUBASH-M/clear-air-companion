@@ -11,6 +11,7 @@ import {
   respond,
   safetyCheck,
 } from "@/lib/companion";
+import { buildDailyPlanAdvice } from "@/pages/home";
 
 function makeReport(overrides: Partial<AirReport> = {}): AirReport {
   return {
@@ -179,5 +180,34 @@ describe("safetyCheck, extractProfile, and respond", () => {
 
     const unknown = respond("What is the price of gold?", report, DEFAULT_PROFILE, "en");
     expect(unknown.kind).toBe("unknown");
+  });
+});
+
+describe("buildDailyPlanAdvice (DailyPlan card)", () => {
+  it("advises indoor exercise and keeping windows closed when air quality is poor", () => {
+    const items = buildDailyPlanAdvice(makeReport({ aqi: 245, category: "poor" }), DEFAULT_PROFILE, "en");
+    expect(items).toHaveLength(4);
+    expect(items.find((i) => i.id === "exercise")?.action).toBe("Indoor exercise advised");
+    expect(items.find((i) => i.id === "windows")?.action).toBe("Keep windows closed");
+    expect(items.find((i) => i.id === "protection")?.action).toBe("Wear an N95 outdoors");
+  });
+
+  it("advises safe outdoor exercise and cross-ventilation when air quality is good", () => {
+    const items = buildDailyPlanAdvice(makeReport({ aqi: 34, category: "good" }), DEFAULT_PROFILE, "en");
+    expect(items.find((i) => i.id === "exercise")?.action).toBe("Outdoor exercise safe");
+    expect(items.find((i) => i.id === "windows")?.action).toBe("Cross-ventilate indoors");
+    expect(items.find((i) => i.id === "protection")?.action).toBe("No mask needed today");
+  });
+
+  it("escalates moderate AQI for sensitive households and supports Hindi copy", () => {
+    const sensitive = buildDailyPlanAdvice(
+      makeReport({ aqi: 150, category: "moderate" }),
+      { ...DEFAULT_PROFILE, children: true },
+      "en",
+    );
+    expect(sensitive.find((i) => i.id === "exercise")?.action).toBe("Indoor exercise advised");
+
+    const hiItems = buildDailyPlanAdvice(makeReport({ aqi: 260, category: "poor" }), DEFAULT_PROFILE, "hi");
+    expect(hiItems.find((i) => i.id === "windows")?.action).toBe("खिड़कियाँ बंद रखें");
   });
 });

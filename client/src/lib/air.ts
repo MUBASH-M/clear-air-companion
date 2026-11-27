@@ -152,6 +152,114 @@ export async function fetchAir(place: Place): Promise<AirReport> {
   };
 }
 
+export type SurroundingAirPin = {
+  id: string;
+  label: string;
+  sector: string;
+  isCenter: boolean;
+  lat: number;
+  lon: number;
+  aqi: number;
+  category: CategoryKey;
+  dominant: string;
+  pm25: number;
+  pm10: number;
+  no2: number;
+};
+
+type GridPointSpec = {
+  id: string;
+  en: string;
+  hi: string;
+  dNorthKm: number;
+  dEastKm: number;
+  isCenter?: boolean;
+};
+
+const SURROUNDING_RING: GridPointSpec[] = [
+  { id: "center", en: "Center", hi: "केंद्र", dNorthKm: 0, dEastKm: 0, isCenter: true },
+  { id: "n", en: "North", hi: "उत्तर", dNorthKm: 12, dEastKm: 0 },
+  { id: "ne", en: "North-East", hi: "उत्तर-पूर्व", dNorthKm: 8.5, dEastKm: 8.5 },
+  { id: "e", en: "East", hi: "पूर्व", dNorthKm: 0, dEastKm: 12 },
+  { id: "se", en: "South-East", hi: "दक्षिण-पूर्व", dNorthKm: -8.5, dEastKm: 8.5 },
+  { id: "s", en: "South", hi: "दक्षिण", dNorthKm: -12, dEastKm: 0 },
+  { id: "sw", en: "South-West", hi: "दक्षिण-पश्चिम", dNorthKm: -8.5, dEastKm: -8.5 },
+  { id: "w", en: "West", hi: "पश्चिम", dNorthKm: 0, dEastKm: -12 },
+  { id: "nw", en: "North-West", hi: "उत्तर-पश्चिम", dNorthKm: 8.5, dEastKm: -8.5 },
+];
+
+export function buildSurroundingGrid(
+  place: Place,
+  lang: "en" | "hi" = "en",
+): Array<{ id: string; label: string; sector: string; isCenter: boolean; lat: number; lon: number }> {
+  const cosLat = Math.max(0.2, Math.cos((place.lat * Math.PI) / 180));
+  const round4 = (n: number) => Math.round(n * 10000) / 10000;
+
+  return SURROUNDING_RING.map((pt) => {
+    const lat = Math.max(-89.9, Math.min(89.9, round4(place.lat + pt.dNorthKm / 111.32)));
+    const lon = Math.max(-179.9, Math.min(179.9, round4(place.lon + pt.dEastKm / (111.32 * cosLat))));
+    const sector = lang === "en" ? pt.en : pt.hi;
+    return {
+      id: pt.id,
+      label: pt.isCenter ? place.name : `${place.name} · ${sector}`,
+      sector,
+      isCenter: Boolean(pt.isCenter),
+      lat,
+      lon,
+    };
+  });
+}
+
+type OpenMeteoBatchCurrent = {
+  current?: {
+    pm2_5?: number;
+    pm10?: number;
+    nitrogen_dioxide?: number;
+  };
+};
+
+export async function fetchSurroundingAirPins(place: Place, lang: "en" | "hi" = "en"): Promise<SurroundingAirPin[]> {
+  const points = buildSurroundingGrid(place, lang);
+  const lats = points.map((p) => p.lat).join(",");
+  const lons = points.map((p) => p.lon).join(",");
+  const url =
+    `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lats}&longitude=${lons}` +
+    `&current=pm2_5,pm10,nitrogen_dioxide&timezone=auto`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Surrounding air quality service did not respond");
+  const raw = (await res.json()) as OpenMeteoBatchCurrent | OpenMeteoBatchCurrent[];
+  const rows = Array.isArray(raw) ? raw : [raw];
+
+  return points
+    .map((pt, idx): SurroundingAirPin | null => {
+      const cur = rows[idx]?.current;
+      const pm25 = Number(cur?.pm2_5);
+      const pm10 = Number(cur?.pm10);
+      const no2 = Number(cur?.nitrogen_dioxide);
+      if (!Number.isFinite(pm25) && !Number.isFinite(pm10)) return null;
+      const safePm25 = Number.isFinite(pm25) ? pm25 : 0;
+      const safePm10 = Number.isFinite(pm10) ? pm10 : 0;
+      const safeNo2 = Number.isFinite(no2) ? no2 : 0;
+      const { aqi, dominant } = indiaAqi(safePm25, safePm10);
+      return {
+        id: pt.id,
+        label: pt.label,
+        sector: pt.sector,
+        isCenter: pt.isCenter,
+        lat: pt.lat,
+        lon: pt.lon,
+        aqi,
+        category: categoryFor(aqi),
+        dominant,
+        pm25: safePm25,
+        pm10: safePm10,
+        no2: safeNo2,
+      };
+    })
+    .filter((pin): pin is SurroundingAirPin => pin !== null);
+}
+
 type OpenMeteoGeoResult = {
   name?: string;
   admin1?: string;

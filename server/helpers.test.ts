@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   askRequestSchema,
+  chooseGroundingTool,
   createRateLimiter,
   extractMapsSources,
+  extractWebSources,
   formatContextBlock,
   isSafeHttpUrl,
   mapGeminiError,
   mapsExploreRequestSchema,
   sanitizeHistory,
   sanitizeInlineText,
+  searchAlertsRequestSchema,
   validateLatLon,
 } from "./helpers";
 
@@ -41,20 +44,25 @@ describe("server input validation & sanitization", () => {
     expect(validateLatLon(null)).toBeNull();
   });
 
-  it("enforces request schemas for /api/ask and /api/maps-explore", () => {
+  it("enforces request schemas for /api/ask, /api/maps-explore, and /api/search-alerts", () => {
     expect(askRequestSchema.safeParse({ message: "   ", place: { lat: 1, lon: 1 } }).success).toBe(false);
     expect(askRequestSchema.safeParse({ message: "x".repeat(1501), place: { lat: 1, lon: 1 } }).success).toBe(false);
-    expect(
-      askRequestSchema.safeParse({
-        message: "Best window today?",
-        lang: "hi",
-        place: { name: "Pune", lat: 18.52, lon: 73.86 },
-        profile: { children: true, budget: "tight" },
-      }).success,
-    ).toBe(true);
+    expect(askRequestSchema.safeParse({ message: "hi", place: { lat: 1, lon: 1 }, groundingMode: "both" }).success).toBe(false);
+    const parsedAsk = askRequestSchema.safeParse({
+      message: "Best window today?",
+      lang: "hi",
+      place: { name: "Pune", lat: 18.52, lon: 73.86 },
+      profile: { children: true, budget: "tight" },
+      groundingMode: "search",
+    });
+    expect(parsedAsk.success).toBe(true);
+    if (parsedAsk.success) expect(parsedAsk.data.groundingMode).toBe("search");
 
     expect(mapsExploreRequestSchema.safeParse({ query: "", place: { lat: 1, lon: 1 } }).success).toBe(false);
     expect(mapsExploreRequestSchema.safeParse({ query: "pharmacy", lang: "en", place: { lat: 1, lon: 1 } }).success).toBe(true);
+
+    expect(searchAlertsRequestSchema.safeParse({ lang: "en", place: { lat: 28.6, lon: 77.2 }, topic: "GRAP" }).success).toBe(true);
+    expect(searchAlertsRequestSchema.safeParse({ lang: "en", place: { lat: 28.6, lon: 77.2 }, topic: "x".repeat(241) }).success).toBe(false);
   });
 
   it("sanitizes chat history to valid user/assistant messages capped at 6 turns", () => {
@@ -70,7 +78,19 @@ describe("server input validation & sanitization", () => {
   });
 });
 
-describe("Maps grounding extraction, context formatting, errors & rate limiting", () => {
+describe("grounding routing, Maps & Search source extraction, context formatting, errors & rate limiting", () => {
+  it("routes grounding tool cleanly between Maps and Search without combining them", () => {
+    expect(chooseGroundingTool("Where can I buy N95 masks near me?", "auto")).toBe("maps");
+    expect(chooseGroundingTool("नज़दीक कोई फ़ार्मेसी या पार्क बताएं", "auto")).toBe("maps");
+    expect(chooseGroundingTool("Is GRAP Stage 3 active today?", "auto")).toBe("search");
+    expect(chooseGroundingTool("आज स्कूल बंद होने की कोई ताज़ा खबर है?", "auto")).toBe("search");
+    expect(chooseGroundingTool("Should I air out my bedroom at 2pm?", "auto")).toBe("search");
+
+    // Explicit mode overrides intent detection
+    expect(chooseGroundingTool("Is GRAP Stage 3 active today?", "maps")).toBe("maps");
+    expect(chooseGroundingTool("Nearest pharmacy near me", "search")).toBe("search");
+  });
+
   it("deduplicates Maps grounding places and strips unsafe review/place URLs", () => {
     const sources = extractMapsSources({
       candidates: [
@@ -103,6 +123,28 @@ describe("Maps grounding extraction, context formatting, errors & rate limiting"
     expect(sources[0].reviewSnippets).toHaveLength(2);
     expect(sources[0].reviewSnippets[0].uri).toBe("https://maps.google.com/review/1");
     expect(sources[0].reviewSnippets[1].uri).toBeUndefined();
+  });
+
+  it("extracts deduplicated, safe Google Search web sources with hostname fallback", () => {
+    const sources = extractWebSources({
+      candidates: [
+        {
+          groundingMetadata: {
+            groundingChunks: [
+              { web: { title: "CPCB Air Quality\nBulletin", uri: "https://cpcb.nic.in/aqi-bulletin" } },
+              { web: { title: "Duplicate URL", uri: "https://cpcb.nic.in/aqi-bulletin" } },
+              { web: { title: "", uri: "https://caqm.nic.in/grap-orders" } },
+              { web: { title: "Unsafe link", uri: "javascript:alert(1)" } },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(sources).toEqual([
+      { title: "CPCB Air Quality Bulletin", uri: "https://cpcb.nic.in/aqi-bulletin" },
+      { title: "caqm.nic.in", uri: "https://caqm.nic.in/grap-orders" },
+    ]);
   });
 
   it("formats sanitized context blocks for Gemini grounding prompts", () => {

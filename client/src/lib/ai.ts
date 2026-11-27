@@ -2,6 +2,8 @@ import { AirReport, Place, fmtHour } from "./air";
 import { Profile } from "./companion";
 import { Lang } from "./knowledge";
 
+export type GroundingMode = "auto" | "maps" | "search";
+
 export type MapsReviewSnippet = {
   uri?: string;
   title?: string;
@@ -15,9 +17,16 @@ export type MapsGroundingSource = {
   reviewSnippets: MapsReviewSnippet[];
 };
 
+export type WebGroundingSource = {
+  title: string;
+  uri: string;
+};
+
 export type GroundedResponse = {
   text: string;
   sources: MapsGroundingSource[];
+  webSources: WebGroundingSource[];
+  groundingUsed?: "maps" | "search";
 };
 
 function summarizeAir(report: AirReport | null) {
@@ -40,6 +49,7 @@ export async function askGroundedAssistant(params: {
   report: AirReport | null;
   profile: Profile;
   history: Array<{ role: "user" | "assistant"; text: string }>;
+  groundingMode?: GroundingMode;
 }): Promise<GroundedResponse> {
   const res = await fetch("/api/ask", {
     method: "POST",
@@ -56,6 +66,7 @@ export async function askGroundedAssistant(params: {
       air: summarizeAir(params.report),
       profile: params.profile,
       history: params.history.slice(-6),
+      groundingMode: params.groundingMode ?? "auto",
     }),
   });
 
@@ -66,8 +77,8 @@ export async function askGroundedAssistant(params: {
     if (res.status === 404 || !isJson) {
       throw new Error(
         params.lang === "hi"
-          ? "लाइव AI और Google Maps ग्राउंडिंग के लिए फ़ुल-स्टैक सर्वर आवश्यक है (यह स्टैटिक GitHub Pages पर उपलब्ध नहीं है)।"
-          : "Live Gemini Maps Grounding requires the full-stack server deployment (not available on static GitHub Pages).",
+          ? "लाइव AI, Google Maps और Google Search ग्राउंडिंग के लिए फ़ुल-स्टैक सर्वर आवश्यक है (यह स्टैटिक GitHub Pages पर उपलब्ध नहीं है)।"
+          : "Live Gemini Maps & Search Grounding requires the full-stack server deployment (not available on static GitHub Pages).",
       );
     }
     throw new Error(typeof data?.error === "string" ? data.error : `Request failed (${res.status})`);
@@ -76,6 +87,8 @@ export async function askGroundedAssistant(params: {
   return {
     text: typeof data.text === "string" ? data.text : "",
     sources: Array.isArray(data.sources) ? data.sources : [],
+    webSources: Array.isArray(data.webSources) ? data.webSources : [],
+    groundingUsed: data.groundingUsed === "maps" || data.groundingUsed === "search" ? data.groundingUsed : undefined,
   };
 }
 
@@ -118,5 +131,49 @@ export async function exploreNearbyWithMaps(params: {
   return {
     text: typeof data.text === "string" ? data.text : "",
     sources: Array.isArray(data.sources) ? data.sources : [],
+    webSources: [],
+    groundingUsed: "maps",
+  };
+}
+
+export async function fetchLiveAirAdvisories(params: {
+  lang: Lang;
+  place: Place;
+  report: AirReport | null;
+  topic?: string;
+}): Promise<{ text: string; webSources: WebGroundingSource[] }> {
+  const res = await fetch("/api/search-alerts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      lang: params.lang,
+      place: {
+        name: params.place.name,
+        region: params.place.region,
+        lat: params.place.lat,
+        lon: params.place.lon,
+      },
+      air: summarizeAir(params.report),
+      topic: params.topic,
+    }),
+  });
+
+  const contentType = res.headers.get("content-type") ?? "";
+  const isJson = contentType.includes("application/json");
+  const data = isJson ? await res.json().catch(() => ({})) : {};
+  if (!res.ok || !isJson) {
+    if (res.status === 404 || !isJson) {
+      throw new Error(
+        params.lang === "hi"
+          ? "लाइव Google Search समाचार अपडेट के लिए फ़ुल-स्टैक सर्वर आवश्यक है।"
+          : "Live Google Search advisories require the full-stack server deployment.",
+      );
+    }
+    throw new Error(typeof data?.error === "string" ? data.error : `Request failed (${res.status})`);
+  }
+
+  return {
+    text: typeof data.text === "string" ? data.text : "",
+    webSources: Array.isArray(data.webSources) ? data.webSources : [],
   };
 }

@@ -2,6 +2,7 @@ import { UseQueryResult } from "@tanstack/react-query";
 import { Bar, BarChart, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { AlertTriangle, Info, LocateFixed, RefreshCw, Wind } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AirReport, CATEGORIES, CategoryKey, fmtHour } from "@/lib/air";
 import { Lang, tr } from "@/lib/knowledge";
@@ -52,29 +53,33 @@ function AqiDial({ aqi, color, categoryLabel, lang }: { aqi: number; color: stri
 export function LocationPendingCard({ locating, lang, onRetry }: { locating: boolean; lang: Lang; onRetry: () => void }) {
   if (locating) {
     return (
-      <div className="space-y-3 rounded-xl border bg-card p-6" role="status" aria-live="polite" data-testid="status-map-locating">
-        <p className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-          <LocateFixed className="h-4 w-4 animate-pulse text-primary" aria-hidden />
-          {lang === "en" ? "Detecting your current location…" : "आपका वर्तमान स्थान खोजा जा रहा है…"}
-        </p>
-        <Skeleton className="h-64 w-full rounded-lg" />
-      </div>
+      <Card className="shadow-none" role="status" aria-live="polite" data-testid="status-map-locating">
+        <CardContent className="space-y-3 p-6">
+          <p className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <LocateFixed className="h-4 w-4 text-primary" aria-hidden />
+            {lang === "en" ? "Detecting your current location…" : "आपका वर्तमान स्थान खोजा जा रहा है…"}
+          </p>
+          <Skeleton className="h-64 w-full rounded-lg" />
+        </CardContent>
+      </Card>
     );
   }
   return (
-    <div className="rounded-xl border border-dashed bg-card p-6 text-center" role="alert" data-testid="status-map-location-error">
-      <LocateFixed className="mx-auto h-7 w-7 text-muted-foreground" aria-hidden />
-      <h2 className="mt-2 text-base font-semibold">{lang === "en" ? "We couldn't detect your location" : "आपका स्थान नहीं मिल सका"}</h2>
-      <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-        {lang === "en"
-          ? "Allow location permission in your browser, or pick a city from the location menu above."
-          : "ब्राउज़र में लोकेशन की अनुमति दें, या ऊपर दिए गए स्थान मेनू से कोई शहर चुनें।"}
-      </p>
-      <Button size="sm" className="mt-4" onClick={onRetry} data-testid="button-retry-location">
-        <LocateFixed className="h-4 w-4" aria-hidden />
-        {lang === "en" ? "Detect my location" : "मेरा स्थान खोजें"}
-      </Button>
-    </div>
+    <Card className="border-dashed shadow-none" role="alert" data-testid="status-map-location-error">
+      <CardContent className="p-6 text-center">
+        <LocateFixed className="mx-auto h-7 w-7 text-muted-foreground" aria-hidden />
+        <h2 className="mt-2 text-base font-semibold">{lang === "en" ? "We couldn't detect your location" : "आपका स्थान नहीं मिल सका"}</h2>
+        <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+          {lang === "en"
+            ? "Allow location permission in your browser, or pick a city from the location menu above."
+            : "ब्राउज़र में लोकेशन की अनुमति दें, या ऊपर दिए गए स्थान मेनू से कोई शहर चुनें।"}
+        </p>
+        <Button size="sm" className="mt-4" onClick={onRetry} data-testid="button-retry-location">
+          <LocateFixed className="h-4 w-4" aria-hidden />
+          {lang === "en" ? "Detect my location" : "मेरा स्थान खोजें"}
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -91,68 +96,74 @@ type AirPanelProps = {
 export function AirPanel({ q, lang, t, hasPlace, locating, locError, onRetry }: AirPanelProps) {
   if ((!hasPlace && locating) || q.isLoading) {
     return (
-      <div className="rounded-xl border bg-card p-5" role="status" aria-live="polite" data-testid="status-air-loading">
-        {!hasPlace && locating ? (
-          <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground" data-testid="status-locating">
-            <LocateFixed className="h-3.5 w-3.5 animate-pulse text-primary" aria-hidden />
-            {lang === "en" ? "Detecting your current location…" : "आपका वर्तमान स्थान खोजा जा रहा है…"}
-          </p>
-        ) : (
-          <Skeleton className="h-4 w-28" />
-        )}
-        <div className="mt-4 flex items-center gap-4">
-          <Skeleton className="h-32 w-32 rounded-full" />
-          <div className="flex-1 space-y-2">
-            <Skeleton className="h-6 w-24" />
-            <Skeleton className="h-4 w-32" />
+      <Card className="shadow-none" role="status" aria-live="polite" data-testid="status-air-loading">
+        <CardContent className="p-5">
+          {!hasPlace && locating ? (
+            <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground" data-testid="status-locating">
+              <LocateFixed className="h-3.5 w-3.5 text-primary" aria-hidden />
+              {lang === "en" ? "Detecting your current location…" : "आपका वर्तमान स्थान खोजा जा रहा है…"}
+            </p>
+          ) : (
+            <Skeleton className="h-4 w-28" />
+          )}
+          <div className="mt-4 flex items-center gap-4">
+            <Skeleton className="h-32 w-32 rounded-full" />
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-6 w-24" />
+              <Skeleton className="h-4 w-32" />
+            </div>
           </div>
-        </div>
-        <Skeleton className="mt-5 h-28 w-full" />
-      </div>
+          <Skeleton className="mt-5 h-28 w-full" />
+        </CardContent>
+      </Card>
     );
   }
 
   if (!hasPlace) {
     return (
-      <div className="rounded-xl border bg-card p-5" role="alert" data-testid="status-location-error">
-        <p className="flex items-center gap-2 font-semibold">
-          <LocateFixed className="h-4 w-4 text-primary" aria-hidden />
-          {lang === "en" ? "Location needed" : "स्थान आवश्यक है"}
-        </p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {locError
-            ? lang === "en"
-              ? "Couldn't detect your location automatically. Try again or pick a city from the header."
-              : "आपका स्थान अपने आप नहीं मिल सका। फिर कोशिश करें या ऊपर से कोई शहर चुनें।"
-            : lang === "en"
-              ? "Allow location access or pick a city above to load air quality for your area."
-              : "अपने क्षेत्र की हवा देखने के लिए लोकेशन की अनुमति दें या ऊपर से शहर चुनें।"}
-        </p>
-        <Button size="sm" className="mt-3" onClick={onRetry} data-testid="button-retry-locate">
-          <LocateFixed className="h-4 w-4" aria-hidden />
-          {lang === "en" ? "Try detecting again" : "फिर से खोजें"}
-        </Button>
-      </div>
+      <Card className="shadow-none" role="alert" data-testid="status-location-error">
+        <CardContent className="p-5">
+          <p className="flex items-center gap-2 font-semibold">
+            <LocateFixed className="h-4 w-4 text-primary" aria-hidden />
+            {lang === "en" ? "Location needed" : "स्थान आवश्यक है"}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {locError
+              ? lang === "en"
+                ? "Couldn't detect your location automatically. Try again or pick a city from the header."
+                : "आपका स्थान अपने आप नहीं मिल सका। फिर कोशिश करें या ऊपर से कोई शहर चुनें।"
+              : lang === "en"
+                ? "Allow location access or pick a city above to load air quality for your area."
+                : "अपने क्षेत्र की हवा देखने के लिए लोकेशन की अनुमति दें या ऊपर से शहर चुनें।"}
+          </p>
+          <Button size="sm" className="mt-3" onClick={onRetry} data-testid="button-retry-locate">
+            <LocateFixed className="h-4 w-4" aria-hidden />
+            {lang === "en" ? "Try detecting again" : "फिर से खोजें"}
+          </Button>
+        </CardContent>
+      </Card>
     );
   }
 
   if (q.isError || !q.data) {
     return (
-      <div className="rounded-xl border bg-card p-5" role="alert" data-testid="status-air-error">
-        <p className="flex items-center gap-2 font-semibold">
-          <AlertTriangle className="h-4 w-4 text-destructive" aria-hidden />
-          {lang === "en" ? "Couldn't load air data" : "वायु डेटा लोड नहीं हुआ"}
-        </p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {lang === "en"
-            ? "The plan needs a fresh reading, so we won't guess. Check your connection and try again."
-            : "योजना के लिए ताज़ा आँकड़ा चाहिए, इसलिए हम अंदाज़ा नहीं लगाएँगे। कनेक्शन जाँचकर फिर कोशिश करें।"}
-        </p>
-        <Button size="sm" className="mt-3" onClick={onRetry} data-testid="button-retry">
-          <RefreshCw className="h-4 w-4" aria-hidden />
-          {lang === "en" ? "Try again" : "फिर कोशिश करें"}
-        </Button>
-      </div>
+      <Card className="shadow-none" role="alert" data-testid="status-air-error">
+        <CardContent className="p-5">
+          <p className="flex items-center gap-2 font-semibold">
+            <AlertTriangle className="h-4 w-4 text-destructive" aria-hidden />
+            {lang === "en" ? "Couldn't load air data" : "वायु डेटा लोड नहीं हुआ"}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {lang === "en"
+              ? "The plan needs a fresh reading, so we won't guess. Check your connection and try again."
+              : "योजना के लिए ताज़ा आँकड़ा चाहिए, इसलिए हम अंदाज़ा नहीं लगाएँगे। कनेक्शन जाँचकर फिर कोशिश करें।"}
+          </p>
+          <Button size="sm" className="mt-3" onClick={onRetry} data-testid="button-retry">
+            <RefreshCw className="h-4 w-4" aria-hidden />
+            {lang === "en" ? "Try again" : "फिर कोशिश करें"}
+          </Button>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -167,11 +178,11 @@ export function AirPanel({ q, lang, t, hasPlace, locating, locError, onRetry }: 
       : `${r.place.name} के लिए अगले 24 घंटों का प्रति घंटा AQI अनुमान। अधिकतम AQI ${r.peakToday}।`;
 
   return (
-    <div className="overflow-hidden rounded-xl border bg-card" data-testid="panel-air">
+    <Card className="overflow-hidden shadow-none" data-testid="panel-air">
       <div className="h-1.5" style={{ background: c.color }} />
-      <div className="p-5">
+      <CardContent className="p-5">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="text-xs font-medium text-muted-foreground">
             {t(UI.airNow)} · {r.place.name}
           </p>
           <button
@@ -294,7 +305,7 @@ export function AirPanel({ q, lang, t, hasPlace, locating, locError, onRetry }: 
             ({lang === "en" ? "local time" : "स्थानीय समय"}). {t(UI.source)}
           </span>
         </p>
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }

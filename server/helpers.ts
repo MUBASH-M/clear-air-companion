@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export type Lang = "en" | "hi";
+export type GroundingMode = "auto" | "maps" | "search";
 
 export type PlaceInput = {
   name: string;
@@ -46,6 +47,11 @@ export type MapsGroundingSource = {
   uri: string;
   placeId?: string;
   reviewSnippets: MapsReviewSnippet[];
+};
+
+export type WebGroundingSource = {
+  title: string;
+  uri: string;
 };
 
 const CONTROL_CHARS_RE = /[\u0000-\u001F\u007F]+/g;
@@ -119,6 +125,7 @@ export const askRequestSchema = z.object({
   air: airSummarySchema,
   profile: profileSchema,
   history: z.array(historyItemSchema).max(12).optional(),
+  groundingMode: z.enum(["auto", "maps", "search"]).default("auto"),
 });
 
 export const mapsExploreRequestSchema = z.object({
@@ -127,6 +134,27 @@ export const mapsExploreRequestSchema = z.object({
   place: z.unknown(),
   air: airSummarySchema,
 });
+
+export const searchAlertsRequestSchema = z.object({
+  lang: z.enum(["en", "hi"]).default("en"),
+  place: z.unknown(),
+  air: airSummarySchema,
+  topic: z.string().trim().max(240).optional(),
+});
+
+const MAPS_INTENT_RE =
+  /\b(near\s*me|nearby|nearest|closest|where\s+can\s+i\s+(buy|find|go)|pharmacy|pharmacies|chemist|medical\s+store|hospital|clinic|metro|station|park|mall|museum|library|play\s*area|indoor\s+place|directions|address|open\s+now)\b|कहाँ\s+मिल|नज़दीक|नजदीक|पास\s+में|मेरे\s+पास|फार्मेसी|फ़ार्मेसी|अस्पताल|क्लीनिक|मेट्रो|पार्क|मॉल/i;
+
+const SEARCH_INTENT_RE =
+  /\b(news|latest|today'?s?\s+update|grap|stage\s*[1-4iv]+|caqm|cpcb\s+bulletin|advisory|advisories|school\s+clos|holiday|stubble|parali|odd[\s-]?even|ban|regulation|policy|government|forecast\s+week|who\s+guideline|study|research|why\s+is\s+the\s+air|current\s+alert)\b|ताज़ा|ताजा|खबर|ख़बर|समाचार|नियम|स्कूल\s+बंद|एडवाइजरी|पराली|सरकार|GRAP/i;
+
+export function chooseGroundingTool(message: string, mode: GroundingMode = "auto"): "maps" | "search" {
+  if (mode === "maps") return "maps";
+  if (mode === "search") return "search";
+  if (MAPS_INTENT_RE.test(message)) return "maps";
+  if (SEARCH_INTENT_RE.test(message)) return "search";
+  return "search";
+}
 
 export function sanitizeHistory(raw: unknown): HistoryItem[] {
   if (!Array.isArray(raw)) return [];
@@ -208,6 +236,42 @@ export function extractMapsSources(response: unknown): MapsGroundingSource[] {
   }
 
   return results;
+}
+
+export function extractWebSources(response: unknown): WebGroundingSource[] {
+  const resp = response as {
+    candidates?: Array<{
+      groundingMetadata?: {
+        groundingChunks?: Array<{
+          web?: {
+            uri?: string;
+            title?: string;
+          };
+        }>;
+      };
+    }>;
+  };
+
+  const chunks = resp?.candidates?.[0]?.groundingMetadata?.groundingChunks;
+  if (!Array.isArray(chunks)) return [];
+
+  const seen = new Set<string>();
+  const results: WebGroundingSource[] = [];
+
+  for (const chunk of chunks) {
+    const web = chunk?.web;
+    if (!web || !isSafeHttpUrl(web.uri)) continue;
+    if (seen.has(web.uri)) continue;
+    seen.add(web.uri);
+
+    const cleanTitle = typeof web.title === "string" ? sanitizeInlineText(web.title, 180) : "";
+    results.push({
+      title: cleanTitle || new URL(web.uri).hostname,
+      uri: web.uri,
+    });
+  }
+
+  return results.slice(0, 8);
 }
 
 export function formatContextBlock(place: PlaceInput, air?: AirSummaryInput, profile?: ProfileInput): string {

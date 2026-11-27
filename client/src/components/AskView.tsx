@@ -1,11 +1,13 @@
 import { Dispatch, SetStateAction, useEffect, useRef, useState } from "react";
-import { AlertTriangle, MessageCircle, Send, ShieldAlert } from "lucide-react";
+import { AlertTriangle, Globe, MapPin, MessageCircle, RotateCcw, Send, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { MapsSourcesList } from "@/components/MapsSourcesList";
 import { SafeMarkdown } from "@/components/SafeMarkdown";
+import { WebSourcesList } from "@/components/WebSourcesList";
 import { AirReport, Place } from "@/lib/air";
-import { askGroundedAssistant } from "@/lib/ai";
+import { GroundingMode, askGroundedAssistant } from "@/lib/ai";
 import { ChatMsg, Profile, SUGGESTIONS, extractProfile, safetyCheck } from "@/lib/companion";
 import { Lang, tipById, tr } from "@/lib/knowledge";
 
@@ -20,9 +22,16 @@ type AskViewProps = {
   updateProfile: (p: Partial<Profile>) => void;
 };
 
+const GROUNDING_OPTIONS: Array<{ id: GroundingMode; en: string; hi: string }> = [
+  { id: "auto", en: "Auto", hi: "ऑटो" },
+  { id: "maps", en: "Google Maps", hi: "Google Maps" },
+  { id: "search", en: "Google Search", hi: "Google Search" },
+];
+
 export function AskView({ place, locating, report, profile, lang, messages, setMessages, updateProfile }: AskViewProps) {
   const [text, setText] = useState("");
   const [typing, setTyping] = useState(false);
+  const [groundingMode, setGroundingMode] = useState<GroundingMode>("auto");
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -77,6 +86,7 @@ export function AskView({ place, locating, report, profile, lang, messages, setM
         report,
         profile: merged,
         history: historySnapshot,
+        groundingMode,
       });
       const note = changed.length
         ? lang === "en"
@@ -90,6 +100,8 @@ export function AskView({ place, locating, report, profile, lang, messages, setM
           kind: "normal",
           text: grounded.text + note,
           sources: grounded.sources,
+          webSources: grounded.webSources,
+          groundingUsed: grounded.groundingUsed,
         },
       ]);
     } catch (err) {
@@ -106,7 +118,50 @@ export function AskView({ place, locating, report, profile, lang, messages, setM
   };
 
   return (
-    <div className="flex min-h-[520px] flex-col rounded-xl border bg-card">
+    <Card className="flex min-h-[540px] flex-col overflow-hidden shadow-none">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5">
+        <div
+          className="inline-flex items-center gap-1 rounded-lg bg-muted p-1"
+          role="group"
+          aria-label={lang === "en" ? "Live grounding source" : "लाइव डेटा स्रोत"}
+        >
+          {GROUNDING_OPTIONS.map((opt) => {
+            const active = groundingMode === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setGroundingMode(opt.id)}
+                aria-pressed={active}
+                data-testid={`grounding-mode-${opt.id}`}
+                className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                  active ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {opt.id === "maps" && <MapPin className="h-3.5 w-3.5 text-primary" aria-hidden />}
+                {opt.id === "search" && <Globe className="h-3.5 w-3.5 text-primary" aria-hidden />}
+                {lang === "en" ? opt.en : opt.hi}
+              </button>
+            );
+          })}
+        </div>
+
+        {messages.length > 0 && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setMessages([])}
+            disabled={typing}
+            className="h-7 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground whitespace-nowrap shrink-0"
+            data-testid="button-clear-chat"
+          >
+            <RotateCcw className="h-3.5 w-3.5" aria-hidden />
+            {lang === "en" ? "New chat" : "नई बातचीत"}
+          </Button>
+        )}
+      </div>
+
       <div
         className="flex-1 space-y-4 overflow-y-auto p-4"
         role="log"
@@ -118,13 +173,13 @@ export function AskView({ place, locating, report, profile, lang, messages, setM
           <div className="py-6 text-center">
             <MessageCircle className="mx-auto h-8 w-8 text-primary" aria-hidden />
             <h1 className="mt-2 text-lg font-semibold">
-              {lang === "en" ? "Ask about today's air & nearby places" : "आज की हवा और आसपास के स्थानों के बारे में पूछें"}
+              {lang === "en" ? "Ask about today's air, news & nearby places" : "आज की हवा, ताज़ा अपडेट और आसपास के स्थानों के बारे में पूछें"}
             </h1>
             <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
               {place
                 ? lang === "en"
-                  ? `Tailored to ${place.name}'s live air reading, your household profile, and up-to-date Google Maps place data.`
-                  : `${place.name} की ताज़ा हवा, आपके घर की प्रोफ़ाइल और Google Maps के ताज़ा स्थानीय डेटा के आधार पर उत्तर।`
+                  ? `Multi-turn assistant grounded in ${place.name}'s live air reading, Google Maps local places, and Google Search air advisories.`
+                  : `${place.name} की ताज़ा हवा, Google Maps के स्थानीय स्थानों और Google Search के ताज़ा अपडेट पर आधारित सहायक।`
                 : locating
                   ? lang === "en"
                     ? "Detecting your current location for local air and place guidance…"
@@ -160,6 +215,17 @@ export function AskView({ place, locating, report, profile, lang, messages, setM
                   {lang === "en" ? "Unable to reply" : "उत्तर प्राप्त नहीं हुआ"}
                 </p>
               )}
+              {m.role === "assistant" && m.kind === "normal" && m.groundingUsed && (
+                <p className="mb-1 text-[11px] font-medium text-muted-foreground">
+                  {m.groundingUsed === "maps"
+                    ? lang === "en"
+                      ? "Grounded with Google Maps"
+                      : "Google Maps डेटा पर आधारित"
+                    : lang === "en"
+                      ? "Grounded with Google Search"
+                      : "Google Search डेटा पर आधारित"}
+                </p>
+              )}
               {m.role === "assistant" && m.kind !== "safety" && m.kind !== "error" ? (
                 <div className="prose prose-sm max-w-none text-foreground prose-p:my-1.5 prose-ul:my-1.5 prose-li:my-0.5 prose-strong:text-foreground prose-a:text-primary">
                   <SafeMarkdown>{m.text}</SafeMarkdown>
@@ -168,11 +234,12 @@ export function AskView({ place, locating, report, profile, lang, messages, setM
                 m.text
               )}
               {m.tips && m.tips.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {m.tips.map((id) => {
+                <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                  {m.tips.map((id, idx) => {
                     const tip = tipById(id);
                     return (
-                      <span key={id} className="rounded-full border bg-background px-2 py-0.5 text-xs text-foreground/80">
+                      <span key={id}>
+                        {idx > 0 && <span aria-hidden className="mr-2">·</span>}
                         {tr(tip.title, lang)}
                       </span>
                     );
@@ -180,6 +247,7 @@ export function AskView({ place, locating, report, profile, lang, messages, setM
                 </div>
               )}
               {m.sources && m.sources.length > 0 && <MapsSourcesList sources={m.sources} lang={lang} compact />}
+              {m.webSources && m.webSources.length > 0 && <WebSourcesList sources={m.webSources} lang={lang} compact />}
             </div>
           </div>
         ))}
@@ -208,7 +276,7 @@ export function AskView({ place, locating, report, profile, lang, messages, setM
               type="button"
               onClick={() => send(tr(s, lang))}
               disabled={typing}
-              className="shrink-0 rounded-full border px-3 py-1 text-xs hover-elevate disabled:opacity-50"
+              className="shrink-0 whitespace-nowrap rounded-md border bg-background px-2.5 py-1 text-xs text-foreground transition-colors hover:bg-muted disabled:opacity-50"
               data-testid={`button-suggestion-${i}`}
             >
               {tr(s, lang)}
@@ -225,15 +293,23 @@ export function AskView({ place, locating, report, profile, lang, messages, setM
           <Input
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder={lang === "en" ? "e.g. Where can I buy N95 masks near me?" : "जैसे: मेरे पास N95 मास्क कहाँ मिल सकते हैं?"}
+            placeholder={
+              groundingMode === "search"
+                ? lang === "en"
+                  ? "e.g. Latest GRAP smog rules or school advisories today?"
+                  : "जैसे: आज के ताज़ा GRAP नियम या स्कूल एडवाइजरी क्या हैं?"
+                : lang === "en"
+                  ? "e.g. Where can I buy N95 masks near me?"
+                  : "जैसे: मेरे पास N95 मास्क कहाँ मिल सकते हैं?"
+            }
             data-testid="input-chat"
-            aria-label={lang === "en" ? "Ask a question about air quality or nearby places" : "वायु गुणवत्ता या आसपास के स्थानों के बारे में प्रश्न लिखें"}
+            aria-label={lang === "en" ? "Ask a question about air quality, news, or nearby places" : "वायु गुणवत्ता, ताज़ा अपडेट या आसपास के स्थानों के बारे में प्रश्न लिखें"}
           />
           <Button type="submit" disabled={!text.trim() || typing} data-testid="button-send" aria-label={lang === "en" ? "Send message" : "संदेश भेजें"}>
             <Send className="h-4 w-4" aria-hidden />
           </Button>
         </form>
       </div>
-    </div>
+    </Card>
   );
 }

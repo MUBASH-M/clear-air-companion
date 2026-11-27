@@ -1,5 +1,5 @@
 import { AirReport, CATEGORIES, CategoryKey, fmtHour } from "./air";
-import { MapsGroundingSource } from "./ai";
+import { MapsGroundingSource, WebGroundingSource } from "./ai";
 import { Lang, T, TIPS, Tip, tipById, tr } from "./knowledge";
 
 export type Profile = {
@@ -471,6 +471,8 @@ export type ChatMsg = {
   kind?: "safety" | "normal" | "unknown" | "error";
   tips?: string[];
   sources?: MapsGroundingSource[];
+  webSources?: WebGroundingSource[];
+  groundingUsed?: "maps" | "search";
 };
 
 const has = (s: string, words: string[]) => words.some((w) => s.includes(w));
@@ -768,6 +770,7 @@ export function respond(text: string, r: AirReport | null, p: Profile, l: Lang):
 
 export const SUGGESTIONS: T[] = [
   { en: "Where can I buy N95 masks near me?", hi: "मेरे पास N95 मास्क कहाँ मिल सकते हैं?" },
+  { en: "Latest GRAP smog rules & school advisories today?", hi: "आज के ताज़ा GRAP नियम और स्कूल प्रदूषण एडवाइजरी क्या हैं?" },
   { en: "Nearest metro stations for a cleaner commute?", hi: "कम धुएँ वाली यात्रा के लिए सबसे पास मेट्रो स्टेशन कौन से हैं?" },
   { en: "Indoor places for my child to play today?", hi: "आज बच्चे के खेलने के लिए पास में इनडोर जगहें कौन सी हैं?" },
   { en: "When should I open the windows today?", hi: "आज खिड़कियाँ कब खोलूँ?" },

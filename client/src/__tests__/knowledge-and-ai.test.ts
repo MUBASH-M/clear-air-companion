@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { askGroundedAssistant, exploreNearbyWithMaps } from "@/lib/ai";
+import { askGroundedAssistant, exploreNearbyWithMaps, fetchLiveAirAdvisories } from "@/lib/ai";
 import { DEFAULT_PROFILE } from "@/lib/companion";
 import { COST_LABEL, EVIDENCE_LABEL, KIND_LABEL, TIPS, fx, tipById, tr } from "@/lib/knowledge";
 import { isSafeHttpUrl } from "@/lib/url";
@@ -58,7 +58,7 @@ describe("isSafeHttpUrl", () => {
 });
 
 describe("AI client API wrappers", () => {
-  it("posts trimmed history (max 6) and parses Maps grounding sources", async () => {
+  it("posts trimmed history (max 6), forwards groundingMode, and parses Maps & Search grounding sources", async () => {
     let capturedBody = "";
     vi.stubGlobal(
       "fetch",
@@ -68,6 +68,8 @@ describe("AI client API wrappers", () => {
           JSON.stringify({
             text: "Nearby pharmacies stocking N95 masks.",
             sources: [{ title: "City Pharmacy", uri: "https://maps.google.com/?q=City+Pharmacy", reviewSnippets: [] }],
+            webSources: [{ title: "CPCB Advisory", uri: "https://cpcb.nic.in/advisory" }],
+            groundingUsed: "maps",
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
@@ -86,12 +88,53 @@ describe("AI client API wrappers", () => {
       report: null,
       profile: DEFAULT_PROFILE,
       history,
+      groundingMode: "maps",
     });
 
     expect(res.text).toBe("Nearby pharmacies stocking N95 masks.");
     expect(res.sources).toHaveLength(1);
-    const parsed = JSON.parse(capturedBody) as { history: unknown[] };
+    expect(res.webSources).toHaveLength(1);
+    expect(res.groundingUsed).toBe("maps");
+    const parsed = JSON.parse(capturedBody) as { history: unknown[]; groundingMode: string };
     expect(parsed.history).toHaveLength(6);
+    expect(parsed.groundingMode).toBe("maps");
+  });
+
+  it("fetches live Search-grounded air quality advisories and surfaces clean errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        expect(String(url)).toBe("/api/search-alerts");
+        return new Response(
+          JSON.stringify({
+            text: "- No active GRAP emergency restrictions in Bengaluru today.",
+            webSources: [{ title: "KSPCB Air Quality", uri: "https://kspcb.karnataka.gov.in" }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }),
+    );
+
+    const brief = await fetchLiveAirAdvisories({
+      lang: "en",
+      place: samplePlace,
+      report: null,
+    });
+    expect(brief.text).toContain("GRAP");
+    expect(brief.webSources).toEqual([{ title: "KSPCB Air Quality", uri: "https://kspcb.karnataka.gov.in" }]);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response("<html>404</html>", {
+          status: 404,
+          headers: { "Content-Type": "text/html" },
+        }),
+      ),
+    );
+    await expect(fetchLiveAirAdvisories({ lang: "hi", place: samplePlace, report: null })).rejects.toThrow(
+      "फ़ुल-स्टैक सर्वर आवश्यक है",
+    );
   });
 
   it("surfaces clean localized errors for server rate limits and static hosts", async () => {

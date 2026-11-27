@@ -5,12 +5,15 @@ import path from "node:path";
 import { GoogleGenAI } from "@google/genai";
 import {
   askRequestSchema,
+  chooseGroundingTool,
   createRateLimiter,
   extractMapsSources,
+  extractWebSources,
   formatContextBlock,
   mapGeminiError,
   mapsExploreRequestSchema,
   sanitizeHistory,
+  searchAlertsRequestSchema,
   validateLatLon,
 } from "./server/helpers";
 
@@ -114,7 +117,7 @@ async function createServer() {
         return res.status(400).json({ error: "Please enter a valid question." });
       }
 
-      const { message, lang, air, profile } = parsed.data;
+      const { message, lang, air, profile, groundingMode } = parsed.data;
       const place = validateLatLon(parsed.data.place);
       if (!place) {
         return res.status(400).json({ error: "Valid location coordinates are required." });
@@ -123,6 +126,12 @@ async function createServer() {
       const history = sanitizeHistory(parsed.data.history);
       const ai = getGeminiClient();
       const context = formatContextBlock(place, air, profile);
+      const selectedTool = chooseGroundingTool(message, groundingMode);
+
+      const groundingInstruction =
+        selectedTool === "maps"
+          ? "- Use the Google Maps tool to give real, up-to-date nearby places near the user's coordinates (pharmacies/N95 masks, hospitals/clinics, metro stations, indoor spaces, quieter parks). Never invent place names or addresses."
+          : "- Use the Google Search tool when current news, GRAP/CAQM pollution stages, CPCB advisories, school circulars, or up-to-date public health guidance are relevant. Cite facts accurately without inventing announcements.";
 
       const systemInstruction = [
         "You are Clear Air Companion, a calm, practical, evidence-based air quality wellbeing assistant for families living through urban smog.",
@@ -131,7 +140,7 @@ async function createServer() {
         "- General wellbeing guidance only: never diagnose conditions, prescribe medicines, or recommend drug dosages. Direct breathing emergencies to call 112 (or 108 for ambulance in India).",
         "- Put free and low-cost actions first. Never endorse or promote commercial purifier or mask brands.",
         "- Be honest about limits (for example, houseplants do not measurably clean smoggy indoor air; cloth/surgical masks do not block PM2.5 like a well-fitted N95/FFP2).",
-        "- When the user asks about nearby places (pharmacies/N95 masks, hospitals/clinics, metro stations, indoor play spaces, quieter parks, local markets, etc.), use the Google Maps tool to give real, up-to-date nearby places near their coordinates. Never invent place names or addresses.",
+        groundingInstruction,
         "- Keep answers concise (roughly 80-180 words), practical, and formatted with clean Markdown bullet points when listing steps or places.",
         "",
         "Current user context:",
@@ -146,31 +155,43 @@ async function createServer() {
         { role: "user", parts: [{ text: message }] },
       ];
 
-      const response = await ai.models.generateContent({
-        model: "gemini-4-hydrogen",
-        contents,
-        config: {
-          systemInstruction,
-          tools: [{ googleMaps: {} }],
-          toolConfig: {
-            retrievalConfig: {
-              latLng: {
-                latitude: place.lat,
-                longitude: place.lon,
+      // Note: googleMaps and googleSearch cannot be combined in the same request
+      const response =
+        selectedTool === "maps"
+          ? await ai.models.generateContent({
+              model: "gemini-4-hydrogen",
+              contents,
+              config: {
+                systemInstruction,
+                tools: [{ googleMaps: {} }],
+                toolConfig: {
+                  retrievalConfig: {
+                    latLng: {
+                      latitude: place.lat,
+                      longitude: place.lon,
+                    },
+                  },
+                },
               },
-            },
-          },
-        },
-      });
+            })
+          : await ai.models.generateContent({
+              model: "gemini-4-hydrogen",
+              contents,
+              config: {
+                systemInstruction,
+                tools: [{ googleSearch: {} }],
+              },
+            });
 
       const text = (response.text ?? "").trim();
-      const sources = extractMapsSources(response);
+      const sources = selectedTool === "maps" ? extractMapsSources(response) : [];
+      const webSources = selectedTool === "search" ? extractWebSources(response) : [];
 
       if (!text) {
         return res.status(502).json({ error: "Empty response from assistant. Please try again." });
       }
 
-      return res.json({ text, sources });
+      return res.json({ text, sources, webSources, groundingUsed: selectedTool });
     } catch (err) {
       return handleGeminiError(err, res);
     }
@@ -227,7 +248,61 @@ async function createServer() {
         return res.status(502).json({ error: "Could not find local place information right now." });
       }
 
-      return res.json({ text, sources });
+      return res.json({ text, sources, webSources: [], groundingUsed: "maps" });
+    } catch (err) {
+      return handleGeminiError(err, res);
+    }
+  });
+
+  app.post("/api/search-alerts", rateLimitMiddleware, async (req, res) => {
+    try {
+      const parsed = searchAlertsRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid advisory request." });
+      }
+
+      const { lang, air, topic } = parsed.data;
+      const place = validateLatLon(parsed.data.place);
+      if (!place) {
+        return res.status(400).json({ error: "Valid location coordinates are required." });
+      }
+
+      const ai = getGeminiClient();
+      const context = formatContextBlock(place, air);
+      const locationLabel = place.region ? `${place.name}, ${place.region}` : place.name;
+
+      const systemInstruction = [
+        "You are Clear Air Companion's live air quality news & official advisory brief powered by Google Search.",
+        `Respond in ${lang === "hi" ? "Hindi (Devanagari script)" : "clear, plain English"}.`,
+        "Use Google Search to check for the latest real-world air quality alerts, GRAP/pollution stages, official environmental agency bulletins, school/commute advisories, or weather shifts affecting air quality in the user's location.",
+        "If no special emergency advisory is currently active, briefly state the current air outlook and seasonal factors clearly without inventing alerts.",
+        "Format as 3-4 concise Markdown bullet points (roughly 80-140 words total). Never give medical diagnoses.",
+        "",
+        "Current user context:",
+        context,
+      ].join("\n");
+
+      const prompt = topic
+        ? `Check latest air quality news and advisories for ${locationLabel} regarding: ${topic}`
+        : `What are the latest air quality advisories, GRAP or official pollution alerts, and 24-48 hour smog outlook for ${locationLabel} right now?`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-4-hydrogen",
+        contents: prompt,
+        config: {
+          systemInstruction,
+          tools: [{ googleSearch: {} }],
+        },
+      });
+
+      const text = (response.text ?? "").trim();
+      const webSources = extractWebSources(response);
+
+      if (!text) {
+        return res.status(502).json({ error: "Could not fetch live air advisories right now." });
+      }
+
+      return res.json({ text, webSources, groundingUsed: "search" });
     } catch (err) {
       return handleGeminiError(err, res);
     }
