@@ -122,7 +122,7 @@ export function Header({ lang, setLang, place, setPlace, locatingInitial, t }: H
             className="max-w-[160px] sm:max-w-[220px]"
           >
             {locatingInitial && !place ? (
-              <LocateFixed className="h-4 w-4 shrink-0 animate-pulse" aria-hidden />
+              <LocateFixed className="h-4 w-4 shrink-0 animate-pulse motion-reduce:animate-none" aria-hidden />
             ) : (
               <MapPin className="h-4 w-4 shrink-0" aria-hidden />
             )}
@@ -155,7 +155,7 @@ export function Header({ lang, setLang, place, setPlace, locatingInitial, t }: H
                 disabled={locating}
                 data-testid="button-geolocate"
               >
-                <LocateFixed className={`h-4 w-4 ${locating ? "animate-pulse" : ""}`} aria-hidden />
+                <LocateFixed className={`h-4 w-4 ${locating ? "animate-pulse motion-reduce:animate-none" : ""}`} aria-hidden />
                 {locating ? (lang === "en" ? "Finding your location…" : "स्थान खोजा जा रहा है…") : t(UI.useLocation)}
               </Button>
               {locError && (
@@ -171,7 +171,7 @@ export function Header({ lang, setLang, place, setPlace, locatingInitial, t }: H
                     role="option"
                     aria-selected={place?.name === p.name && place?.lat === p.lat}
                     onClick={() => choose(p)}
-                    className="flex w-full items-baseline justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover-elevate"
+                    className="flex w-full items-baseline justify-between gap-2 rounded-md px-2 py-2 text-left text-sm hover-elevate focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     data-testid={`option-place-${p.name}`}
                   >
                     <span className="truncate">{p.name}</span>

@@ -18,13 +18,16 @@ export const PRESET_PLACES: Place[] = [
 
 export type CategoryKey = "good" | "satisfactory" | "moderate" | "poor" | "very_poor" | "severe";
 
-export const CATEGORIES: Record<CategoryKey, { en: string; hi: string; color: string; ink: string; min: number }> = {
-  good: { en: "Good", hi: "अच्छा", color: "#3f9b4f", ink: "#ffffff", min: 0 },
-  satisfactory: { en: "Satisfactory", hi: "संतोषजनक", color: "#9cc24a", ink: "#14240f", min: 51 },
-  moderate: { en: "Moderate", hi: "मध्यम", color: "#f2d43a", ink: "#2a2405", min: 101 },
-  poor: { en: "Poor", hi: "खराब", color: "#ec9a2e", ink: "#2a1600", min: 201 },
-  very_poor: { en: "Very poor", hi: "बहुत खराब", color: "#d9412f", ink: "#ffffff", min: 301 },
-  severe: { en: "Severe", hi: "गंभीर", color: "#8a2420", ink: "#ffffff", min: 401 },
+export const CATEGORIES: Record<
+  CategoryKey,
+  { en: string; hi: string; color: string; ink: string; textColor: string; min: number }
+> = {
+  good: { en: "Good", hi: "अच्छा", color: "#2b7a3b", ink: "#ffffff", textColor: "#166534", min: 0 },
+  satisfactory: { en: "Satisfactory", hi: "संतोषजनक", color: "#9cc24a", ink: "#14240f", textColor: "#3f6212", min: 51 },
+  moderate: { en: "Moderate", hi: "मध्यम", color: "#f2d43a", ink: "#2a2405", textColor: "#854d0e", min: 101 },
+  poor: { en: "Poor", hi: "खराब", color: "#ec9a2e", ink: "#2a1600", textColor: "#9a3412", min: 201 },
+  very_poor: { en: "Very poor", hi: "बहुत खराब", color: "#c93322", ink: "#ffffff", textColor: "#b91c1c", min: 301 },
+  severe: { en: "Severe", hi: "गंभीर", color: "#8a2420", ink: "#ffffff", textColor: "#7f1d1d", min: 401 },
 };
 
 export function categoryFor(aqi: number): CategoryKey {

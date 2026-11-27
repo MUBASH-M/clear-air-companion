@@ -60,11 +60,29 @@ describe("CPCB India AQI calculations", () => {
     expect(categoryFor(401)).toBe("severe");
     expect(categoryFor(500)).toBe("severe");
 
+    const relativeLuminance = (hex: string) => {
+      const n = Number.parseInt(hex.slice(1), 16);
+      const channels = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => {
+        const s = v / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    };
+    const contrastRatio = (a: string, b: string) => {
+      const l1 = Math.max(relativeLuminance(a), relativeLuminance(b));
+      const l2 = Math.min(relativeLuminance(a), relativeLuminance(b));
+      return (l1 + 0.05) / (l2 + 0.05);
+    };
+
     for (const cat of Object.values(CATEGORIES)) {
       expect(cat.en.length).toBeGreaterThan(0);
       expect(cat.hi.length).toBeGreaterThan(0);
       expect(cat.color).toMatch(/^#[0-9a-f]{6}$/i);
       expect(cat.ink).toMatch(/^#[0-9a-f]{6}$/i);
+      expect(cat.textColor).toMatch(/^#[0-9a-f]{6}$/i);
+      // WCAG 2.1 AA (>= 4.5:1) for both pill ink-on-color and textColor-on-white
+      expect(contrastRatio(cat.color, cat.ink)).toBeGreaterThanOrEqual(4.5);
+      expect(contrastRatio(cat.textColor, "#ffffff")).toBeGreaterThanOrEqual(4.5);
     }
   });
 });

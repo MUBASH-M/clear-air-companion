@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { SafeMarkdown } from "@/components/SafeMarkdown";
-import { isSafeHttpUrl } from "@/lib/url";
+import { useQuery } from "@tanstack/react-query";
 import {
   APIProvider,
   APILoadingStatus,
@@ -11,7 +10,6 @@ import {
   Pin,
   useAdvancedMarkerRef,
   useApiLoadingStatus,
-  useMap,
   useMapsLibrary,
 } from "@vis.gl/react-google-maps";
 import {
@@ -22,24 +20,31 @@ import {
   Hospital,
   Layers,
   Loader2,
-  MapPin,
   Search,
   ShieldPlus,
   Star,
   TrainFront,
   Trees,
 } from "lucide-react";
+import { MapsSourcesList } from "@/components/MapsSourcesList";
+import { SafeMarkdown } from "@/components/SafeMarkdown";
+import {
+  AirQualityHeatmapOverlay,
+  HeatmapLayerId,
+  LocalizedAqiPin,
+  MAPS_ATTRIBUTION_IDS,
+  MAPS_LIBRARIES,
+  MapCameraSync,
+  formatPickedPlace,
+  syncSurroundingPinsWithReport,
+  useMapsApiKey,
+} from "@/components/maps/shared";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { AirReport, CATEGORIES, Place } from "@/lib/air";
+import { AirReport, Place, SurroundingAirPin, fetchSurroundingAirPins } from "@/lib/air";
 import { GroundedResponse, exploreNearbyWithMaps } from "@/lib/ai";
-import { Lang, tr } from "@/lib/knowledge";
-import { MapsSourcesList } from "@/components/MapsSourcesList";
-
-const BUILD_MAPS_API_KEY = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined)?.trim() || "";
-const ATTRIBUTION_IDS = ["gmp_mcp_codeassist_v1_aistudio"];
-
-type HeatmapLayerId = "IND_CPCB" | "UAQI_RED_GREEN" | "PM25_INDIGO_PERSIAN" | "OFF";
+import { Lang } from "@/lib/knowledge";
+import { isSafeHttpUrl } from "@/lib/url";
 
 type NearbyCategory = {
   id: string;
@@ -126,54 +131,6 @@ const HEATMAP_OPTIONS: Array<{ id: HeatmapLayerId; label: { en: string; hi: stri
   { id: "OFF", label: { en: "Off", hi: "बंद" } },
 ];
 
-function MapCameraSync({ lat, lon }: { lat: number; lon: number }) {
-  const map = useMap();
-  useEffect(() => {
-    if (!map) return;
-    map.panTo({ lat, lng: lon });
-  }, [map, lat, lon]);
-  return null;
-}
-
-function AirQualityHeatmapOverlay({ layer, apiKey }: { layer: HeatmapLayerId; apiKey: string }) {
-  const map = useMap();
-
-  useEffect(() => {
-    if (!map || layer === "OFF" || !apiKey || typeof google === "undefined" || !google.maps) {
-      return;
-    }
-
-    const aqTileLayer = new google.maps.ImageMapType({
-      getTileUrl(coord, zoom) {
-        if (zoom < 0 || zoom > 16) return null;
-        const numTiles = 1 << zoom;
-        if (coord.y < 0 || coord.y >= numTiles) return null;
-        const x = ((coord.x % numTiles) + numTiles) % numTiles;
-        return `https://airquality.googleapis.com/v1/mapTypes/${layer}/heatmapTiles/${zoom}/${x}/${coord.y}?key=${encodeURIComponent(apiKey)}`;
-      },
-      tileSize: new google.maps.Size(256, 256),
-      maxZoom: 16,
-      minZoom: 0,
-      name: `Air Quality (${layer})`,
-      opacity: 0.56,
-    });
-
-    map.overlayMapTypes.insertAt(0, aqTileLayer);
-
-    return () => {
-      const overlays = map.overlayMapTypes;
-      for (let i = overlays.getLength() - 1; i >= 0; i--) {
-        if (overlays.getAt(i) === aqTileLayer) {
-          overlays.removeAt(i);
-          break;
-        }
-      }
-    };
-  }, [map, layer, apiKey]);
-
-  return null;
-}
-
 function NearbyPlaceMarker({
   pin,
   selected,
@@ -196,6 +153,7 @@ function NearbyPlaceMarker({
         position={{ lat: pin.lat, lng: pin.lng }}
         title={pin.name}
         onClick={onSelect}
+        zIndex={15}
       >
         <Pin background={pin.color} borderColor="#ffffff" glyphColor="#ffffff" scale={0.95} />
       </AdvancedMarker>
@@ -215,7 +173,7 @@ function NearbyPlaceMarker({
                 href={pin.uri}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="mt-1.5 inline-flex items-center gap-1 text-xs font-semibold text-primary underline underline-offset-2"
+                className="mt-1.5 inline-flex items-center gap-1 rounded-sm text-xs font-semibold text-primary underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {lang === "en" ? "Open in Google Maps" : "Google Maps में खोलें"}
                 <ExternalLink className="h-3 w-3" aria-hidden />
@@ -315,7 +273,7 @@ function PlacesPinLoader({
 function InteractiveMapCanvas({
   apiKey,
   place,
-  report,
+  aqiPins,
   lang,
   heatmap,
   activeCategory,
@@ -326,7 +284,7 @@ function InteractiveMapCanvas({
 }: {
   apiKey: string;
   place: Place;
-  report: AirReport | null;
+  aqiPins: SurroundingAirPin[];
   lang: Lang;
   heatmap: HeatmapLayerId;
   activeCategory: NearbyCategory | null;
@@ -336,15 +294,19 @@ function InteractiveMapCanvas({
   onPlacesLoading: (loading: boolean) => void;
 }) {
   const status = useApiLoadingStatus();
-  const [pins, setPins] = useState<NearbyPlacePin[]>([]);
-  const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
-  const [showCurrentInfo, setShowCurrentInfo] = useState(false);
-  const [currentMarkerRef, currentMarker] = useAdvancedMarkerRef();
+  const [placePins, setPlacePins] = useState<NearbyPlacePin[]>([]);
+  const [selectedPlacePinId, setSelectedPlacePinId] = useState<string | null>(null);
+  const [selectedAqiPinId, setSelectedAqiPinId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSelectedAqiPinId(null);
+    setSelectedPlacePinId(null);
+  }, [place.lat, place.lon]);
 
   const handlePins = useCallback(
     (next: NearbyPlacePin[]) => {
-      setPins(next);
-      setSelectedPinId(null);
+      setPlacePins(next);
+      setSelectedPlacePinId(null);
       onPinsChange(next);
     },
     [onPinsChange],
@@ -354,16 +316,21 @@ function InteractiveMapCanvas({
     (ev: MapMouseEvent) => {
       const ll = ev.detail.latLng;
       if (!ll) return;
-      const lat = Math.round(ll.lat * 100) / 100;
-      const lon = Math.round(ll.lng * 100) / 100;
-      onSelectPlace({
-        name: `${lat.toFixed(2)}°N, ${lon.toFixed(2)}°E`,
-        region: lang === "en" ? "Picked on map" : "नक्शे से चुना गया",
-        lat,
-        lon,
-      });
+      onSelectPlace(formatPickedPlace(ll.lat, ll.lng, lang));
     },
     [lang, onSelectPlace],
+  );
+
+  const handleFocusAqiPin = useCallback(
+    (pin: SurroundingAirPin) => {
+      onSelectPlace({
+        name: pin.label,
+        region: place.region,
+        lat: pin.lat,
+        lon: pin.lon,
+      });
+    },
+    [onSelectPlace, place.region],
   );
 
   if (status === APILoadingStatus.FAILED || status === APILoadingStatus.AUTH_FAILURE) {
@@ -382,24 +349,22 @@ function InteractiveMapCanvas({
     );
   }
 
-  const cat = report ? CATEGORIES[report.category] : null;
-
   return (
     <div className="relative h-[380px] w-full overflow-hidden rounded-xl border sm:h-[440px]" data-testid="google-map-container">
       <GoogleMap
         defaultCenter={{ lat: place.lat, lng: place.lon }}
-        defaultZoom={12}
+        defaultZoom={11}
         mapId="DEMO_MAP_ID"
         gestureHandling="greedy"
         streetViewControl={false}
         fullscreenControl={true}
         mapTypeControl={false}
         onClick={handleMapClick}
-        internalUsageAttributionIds={ATTRIBUTION_IDS}
+        internalUsageAttributionIds={MAPS_ATTRIBUTION_IDS}
         className="h-full w-full"
       >
         <MapCameraSync lat={place.lat} lon={place.lon} />
-        <AirQualityHeatmapOverlay layer={heatmap} apiKey={apiKey} />
+        <AirQualityHeatmapOverlay layer={heatmap} apiKey={apiKey} opacity={0.56} />
         <PlacesPinLoader
           activeCategory={activeCategory}
           place={place}
@@ -409,47 +374,32 @@ function InteractiveMapCanvas({
           onLoading={onPlacesLoading}
         />
 
-        <AdvancedMarker
-          ref={currentMarkerRef}
-          position={{ lat: place.lat, lng: place.lon }}
-          title={place.name}
-          onClick={() => setShowCurrentInfo(true)}
-        >
-          <div
-            className="flex items-center gap-1.5 rounded-full border-2 border-white px-2.5 py-1 text-xs font-bold shadow-md"
-            style={{
-              background: cat ? cat.color : "#1f5c48",
-              color: cat ? cat.ink : "#ffffff",
+        {aqiPins.map((pin) => (
+          <LocalizedAqiPin
+            key={pin.id}
+            pin={pin}
+            selected={selectedAqiPinId === pin.id}
+            onSelect={() => {
+              setSelectedPlacePinId(null);
+              setSelectedAqiPinId(pin.id);
             }}
-          >
-            <MapPin className="h-3.5 w-3.5 shrink-0" aria-hidden />
-            <span>{report ? `AQI ${report.aqi}` : place.name}</span>
-          </div>
-        </AdvancedMarker>
+            onClose={() => setSelectedAqiPinId(null)}
+            onFocusArea={handleFocusAqiPin}
+            lang={lang}
+            testIdPrefix="fullmap-aqi-pin"
+          />
+        ))}
 
-        {showCurrentInfo && currentMarker && (
-          <InfoWindow anchor={currentMarker} onCloseClick={() => setShowCurrentInfo(false)} maxWidth={240}>
-            <div className="p-0.5 text-foreground">
-              <p className="text-sm font-semibold">{place.name}</p>
-              {report && cat && (
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  AQI {report.aqi} · {tr(cat, lang)} · PM2.5 {Math.round(report.pm25)} µg/m³
-                </p>
-              )}
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                {lang === "en" ? "Click anywhere on the map to check air quality there." : "वहाँ की हवा जाँचने के लिए नक्शे पर कहीं भी क्लिक करें।"}
-              </p>
-            </div>
-          </InfoWindow>
-        )}
-
-        {pins.map((pin) => (
+        {placePins.map((pin) => (
           <NearbyPlaceMarker
             key={pin.id}
             pin={pin}
-            selected={selectedPinId === pin.id}
-            onSelect={() => setSelectedPinId(pin.id)}
-            onClose={() => setSelectedPinId(null)}
+            selected={selectedPlacePinId === pin.id}
+            onSelect={() => {
+              setSelectedAqiPinId(null);
+              setSelectedPlacePinId(pin.id);
+            }}
+            onClose={() => setSelectedPlacePinId(null)}
             lang={lang}
           />
         ))}
@@ -469,32 +419,12 @@ export function AirMapView({
   lang: Lang;
   onSelectPlace: (p: Place) => void;
 }) {
-  const [mapsApiKey, setMapsApiKey] = useState(BUILD_MAPS_API_KEY);
-  const [keyChecked, setKeyChecked] = useState(Boolean(BUILD_MAPS_API_KEY));
+  const { apiKey: mapsApiKey, keyChecked } = useMapsApiKey();
   const [heatmap, setHeatmap] = useState<HeatmapLayerId>("IND_CPCB");
   const [activeCatId, setActiveCatId] = useState<string | null>(null);
   const [mapPinsCount, setMapPinsCount] = useState(0);
   const [placesLoading, setPlacesLoading] = useState(false);
   const [placesError, setPlacesError] = useState("");
-
-  useEffect(() => {
-    if (BUILD_MAPS_API_KEY) return;
-    let cancelled = false;
-    fetch("/api/maps-config")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (!cancelled && typeof data?.apiKey === "string" && data.apiKey.trim()) {
-          setMapsApiKey(data.apiKey.trim());
-        }
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelled) setKeyChecked(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const [customQuery, setCustomQuery] = useState("");
   const [groundedLoading, setGroundedLoading] = useState(false);
@@ -502,6 +432,14 @@ export function AirMapView({
   const [groundedResult, setGroundedResult] = useState<GroundedResponse | null>(null);
   const [activePromptLabel, setActivePromptLabel] = useState("");
 
+  const surroundingQuery = useQuery<SurroundingAirPin[]>({
+    queryKey: ["surrounding-air", place.lat, place.lon, place.name, lang],
+    queryFn: () => fetchSurroundingAirPins(place, lang),
+    staleTime: 10 * 60 * 1000,
+    retry: 1,
+  });
+
+  const aqiPins = syncSurroundingPinsWithReport(surroundingQuery.data, place, report, lang);
   const activeCategory = NEARBY_CATEGORIES.find((c) => c.id === activeCatId) ?? null;
 
   const runGroundedExplore = useCallback(
@@ -539,7 +477,7 @@ export function AirMapView({
     const nextId = activeCatId === cat.id ? null : cat.id;
     setActiveCatId(nextId);
     if (nextId) {
-      runGroundedExplore(cat.groundedPrompt[lang], cat.label[lang]);
+      void runGroundedExplore(cat.groundedPrompt[lang], cat.label[lang]);
     }
   };
 
@@ -555,12 +493,11 @@ export function AirMapView({
         </h1>
         <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
           {lang === "en"
-            ? `Explore live air conditions around ${place.name}, click any point on the map to check its reading, and find real nearby pharmacies, clinics, metro stations or indoor spaces.`
-            : `${place.name} के आसपास की हवा देखें, किसी भी जगह का आँकड़ा जानने के लिए नक्शे पर क्लिक करें, और पास की फ़ार्मेसी, अस्पताल, मेट्रो या इनडोर स्थान खोजें।`}
+            ? `Explore localized AQI pins around ${place.name}, click any point on the map to check its reading, and find real nearby pharmacies, clinics, metro stations or indoor spaces.`
+            : `${place.name} के आसपास के स्थानीय AQI पिन देखें, किसी भी जगह का आँकड़ा जानने के लिए नक्शे पर क्लिक करें, और पास की फ़ार्मेसी, अस्पताल, मेट्रो या इनडोर स्थान खोजें।`}
         </p>
       </div>
 
-      {/* Category buttons trigger both live map pins (when Maps JS is loaded) and Maps Grounding */}
       <div className="flex flex-wrap gap-2" role="group" aria-label={lang === "en" ? "Nearby place categories" : "आसपास के स्थानों की श्रेणियाँ"}>
         {NEARBY_CATEGORIES.map((cat) => {
           const Icon = cat.icon;
@@ -582,7 +519,6 @@ export function AirMapView({
         })}
       </div>
 
-      {/* Interactive Google Map Section */}
       {mapsApiKey ? (
         <div className="space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -597,7 +533,7 @@ export function AirMapView({
                   type="button"
                   onClick={() => setHeatmap(opt.id)}
                   aria-pressed={heatmap === opt.id}
-                  className={`rounded-md border px-2 py-0.5 text-xs font-medium transition-colors ${
+                  className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                     heatmap === opt.id
                       ? "border-primary bg-primary text-primary-foreground"
                       : "bg-card text-muted-foreground hover:text-foreground"
@@ -608,31 +544,31 @@ export function AirMapView({
                 </button>
               ))}
             </div>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-muted-foreground tabular-nums" aria-live="polite">
               {placesLoading
                 ? lang === "en"
                   ? "Searching nearby pins…"
                   : "आसपास के पिन खोजे जा रहे हैं…"
                 : activeCategory && mapPinsCount > 0
                   ? lang === "en"
-                    ? `${mapPinsCount} places pinned · tap a pin for details`
-                    : `${mapPinsCount} स्थान पिन किए गए · विवरण के लिए पिन दबाएँ`
+                    ? `${mapPinsCount} places + ${aqiPins.length} AQI pins · tap any pin`
+                    : `${mapPinsCount} स्थान + ${aqiPins.length} AQI पिन · किसी पिन पर टैप करें`
                   : lang === "en"
-                    ? "Tap anywhere on the map to check AQI there"
-                    : "वहाँ का AQI जानने के लिए नक्शे पर कहीं भी टैप करें"}
+                    ? `${aqiPins.length} local AQI pins · tap a pin or map spot`
+                    : `${aqiPins.length} स्थानीय AQI पिन · पिन या नक्शे पर टैप करें`}
             </p>
           </div>
 
           <APIProvider
             apiKey={mapsApiKey}
-            libraries={["marker", "places"]}
+            libraries={MAPS_LIBRARIES}
             language={lang}
             region="IN"
           >
             <InteractiveMapCanvas
               apiKey={mapsApiKey}
               place={place}
-              report={report}
+              aqiPins={aqiPins}
               lang={lang}
               heatmap={heatmap}
               activeCategory={activeCategory}
@@ -646,8 +582,8 @@ export function AirMapView({
           {placesError && <p className="text-xs text-destructive" role="alert">{placesError}</p>}
         </div>
       ) : !keyChecked ? (
-        <div className="flex h-[220px] items-center justify-center rounded-xl border bg-card">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden />
+        <div className="flex h-[220px] items-center justify-center rounded-xl border bg-card" role="status" aria-live="polite">
+          <Loader2 className="h-5 w-5 animate-spin motion-reduce:animate-none text-muted-foreground" aria-hidden />
         </div>
       ) : (
         <div
@@ -672,11 +608,10 @@ export function AirMapView({
         </div>
       )}
 
-      {/* Grounded Local Place Guide powered by gemini-4-hydrogen + googleMaps tool */}
-      <section className="rounded-xl border bg-card p-5" data-testid="maps-grounded-panel">
+      <section className="rounded-xl border bg-card p-5" aria-labelledby="local-finder-heading" data-testid="maps-grounded-panel">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-base font-semibold">
+            <h2 id="local-finder-heading" className="text-base font-semibold">
               {lang === "en" ? "Local Clean-Air Place Finder" : "स्थानीय स्वच्छ-वायु स्थान खोजक"}
             </h2>
             <p className="text-xs text-muted-foreground">
@@ -692,7 +627,7 @@ export function AirMapView({
             e.preventDefault();
             if (!customQuery.trim() || groundedLoading) return;
             setActiveCatId(null);
-            runGroundedExplore(customQuery, customQuery.trim());
+            void runGroundedExplore(customQuery, customQuery.trim());
           }}
           className="mt-3 flex gap-2"
         >
@@ -712,13 +647,19 @@ export function AirMapView({
             />
           </div>
           <Button type="submit" disabled={!customQuery.trim() || groundedLoading} data-testid="button-maps-explore">
-            {groundedLoading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : lang === "en" ? "Find" : "खोजें"}
+            {groundedLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden />
+            ) : lang === "en" ? (
+              "Find"
+            ) : (
+              "खोजें"
+            )}
           </Button>
         </form>
 
         {groundedLoading && (
           <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground" role="status" aria-live="polite">
-            <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden />
+            <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none text-primary" aria-hidden />
             <span>
               {lang === "en"
                 ? `Checking Google Maps near ${place.name}…`

@@ -98,14 +98,17 @@ export function TipsView({ profile, lang, done, toggleDone }: TipsViewProps) {
             type="button"
             onClick={() => setFilter(k)}
             aria-pressed={filter === k}
-            className={`rounded-full border px-3 py-1 text-sm ${filter === k ? "border-primary bg-primary text-primary-foreground" : "hover-elevate"}`}
+            className={`rounded-full border px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${filter === k ? "border-primary bg-primary text-primary-foreground" : "hover-elevate"}`}
             data-testid={`filter-${k}`}
           >
             {k === "all" ? (lang === "en" ? "All" : "सभी") : tr(KIND_LABEL[k], lang)}
           </button>
         ))}
       </div>
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
+      <p className="mt-3 text-xs text-muted-foreground tabular-nums" role="status" aria-live="polite" data-testid="tips-count">
+        {lang === "en" ? `Showing ${tips.length} practical tips` : `${tips.length} उपयोगी सुझाव दिख रहे हैं`}
+      </p>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
         {tips.map((tip) => (
           <TipCard
             key={tip.id}

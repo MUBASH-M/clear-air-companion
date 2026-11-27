@@ -188,11 +188,11 @@ export function AirPanel({ q, lang, t, hasPlace, locating, locError, onRetry }: 
           <button
             type="button"
             onClick={onRetry}
-            className="rounded-md p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label={lang === "en" ? `Refresh air data for ${r.place.name}` : `${r.place.name} का वायु डेटा रीफ़्रेश करें`}
             data-testid="button-refresh"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${q.isFetching ? "animate-spin" : ""}`} aria-hidden />
+            <RefreshCw className={`h-4 w-4 ${q.isFetching ? "animate-spin motion-reduce:animate-none" : ""}`} aria-hidden />
           </button>
         </div>
 

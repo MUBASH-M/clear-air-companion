@@ -192,7 +192,7 @@ export function TodayView({
               className="shrink-0 whitespace-nowrap"
               data-testid="button-fetch-advisories"
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${advisoryLoading ? "animate-spin" : ""}`} aria-hidden />
+              <RefreshCw className={`h-3.5 w-3.5 ${advisoryLoading ? "animate-spin motion-reduce:animate-none" : ""}`} aria-hidden />
               {advisory
                 ? lang === "en"
                   ? "Refresh"

@@ -35,7 +35,12 @@ export function AskView({ place, locating, report, profile, lang, messages, setM
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (typeof endRef.current?.scrollIntoView !== "function") return;
+    const prefersReduced =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    endRef.current.scrollIntoView({ behavior: prefersReduced ? "auto" : "smooth", block: "nearest" });
   }, [messages, typing]);
 
   const send = async (raw: string) => {
@@ -258,7 +263,7 @@ export function AskView({ place, locating, report, profile, lang, messages, setM
               {[0, 1, 2].map((d) => (
                 <span
                   key={d}
-                  className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground"
+                  className="h-1.5 w-1.5 animate-bounce motion-reduce:animate-none rounded-full bg-muted-foreground"
                   style={{ animationDelay: `${d * 120}ms` }}
                 />
               ))}
@@ -276,7 +281,7 @@ export function AskView({ place, locating, report, profile, lang, messages, setM
               type="button"
               onClick={() => send(tr(s, lang))}
               disabled={typing}
-              className="shrink-0 whitespace-nowrap rounded-md border bg-background px-2.5 py-1 text-xs text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+              className="shrink-0 whitespace-nowrap rounded-md border bg-background px-2.5 py-1.5 text-xs text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
               data-testid={`button-suggestion-${i}`}
             >
               {tr(s, lang)}
